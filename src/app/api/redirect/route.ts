@@ -1,5 +1,4 @@
 import { and, desc, eq, gte } from "drizzle-orm";
-import { Redis } from "@upstash/redis";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
@@ -11,6 +10,7 @@ import {
   SUPPORTED_MERCHANT_NAMES,
 } from "@/lib/data/merchants";
 import { getAffiliateLinkByIndex, getNextAffiliateLinkIndex } from "@/lib/affiliate-rotation";
+import { getRedisClient } from "@/lib/redis";
 
 const TEST_MERCHANT_HOMEPAGES: Record<string, string> = {
   flipkart: "https://fktr.in/49T8I82",
@@ -28,23 +28,6 @@ const IST_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
   month: "2-digit",
   day: "2-digit",
 });
-
-let redisClient: Redis | null = null;
-
-const getRedisClient = (): Redis | null => {
-  if (redisClient) {
-    return redisClient;
-  }
-
-  const url = process.env.UPSTASH_REDIS_REST_URL;
-  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
-  if (!url || !token) {
-    return null;
-  }
-
-  redisClient = new Redis({ url, token });
-  return redisClient;
-};
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -103,7 +86,7 @@ export async function GET(request: NextRequest) {
 
     if (!user) {
       return NextResponse.redirect(
-        new URL(`/sign-in?redirect=/merchants?merchantId=${merchantId}`, request.url),
+        new URL(`/sign-in?redirect=${encodeURIComponent(`/merchants?merchantId=${merchantId}`)}`, request.url),
         { status: 307 },
       );
     }
@@ -236,16 +219,27 @@ export async function GET(request: NextRequest) {
       console.warn("Click insert failed, continuing to redirect:", error);
     }
 
-    // RAW UNTOUCHED REDIRECT FOR AMAZON
-    if (merchantNameKey === "amazon" && affiliateLinkUrl) {
-      return new NextResponse(null, {
-        status: 307,
-        headers: {
-          Location: affiliateLinkUrl,
-          "Cache-Control": "no-store, max-age=0",
-        },
-      });
-    }
+    // AMAZON REDIRECT WITH USER SUBTAG
+if (merchantNameKey === "amazon" && affiliateLinkUrl) {
+  
+  // Add user ID as subtag to track who clicked
+  let amazonUrlWithSubtag = affiliateLinkUrl;
+  try {
+    const amazonUrl = new URL(affiliateLinkUrl);
+    amazonUrl.searchParams.set("ascsubtag", String(user.id));
+    amazonUrlWithSubtag = amazonUrl.toString();
+  } catch {
+    amazonUrlWithSubtag = affiliateLinkUrl;
+  }
+
+  return new NextResponse(null, {
+    status: 307,
+    headers: {
+      Location: amazonUrlWithSubtag,
+      "Cache-Control": "no-store, max-age=0",
+    },
+  });
+}
 
     // STANDARD REDIRECT FOR OTHERS
     let destinationUrl = merchant.baseUrl;
@@ -254,7 +248,7 @@ export async function GET(request: NextRequest) {
         destinationUrl = TEST_MERCHANT_HOMEPAGES[merchantNameKey];
       }
 
-      const subid = user.name || user.email.split("@")[0];
+      const subid = String(user.id);
       destinationUrl = appendSubidParam(destinationUrl, subid);
     } catch {
       // Keep base URL if manipulation fails.
