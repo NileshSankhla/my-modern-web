@@ -26,7 +26,7 @@ const SignInPage = async ({ searchParams }: SignInPageProps) => {
   const googleError = params.error?.trim() || null;
 
   return (
-    <div className="relative flex min-h-[calc(100vh-5rem)] items-center justify-center overflow-hidden bg-muted/5 px-4 py-12 sm:px-6 lg:px-8">
+    <div className="relative flex min-h-[calc(100dvh-5rem)] items-center justify-center overflow-hidden bg-muted/5 px-4 py-12 sm:px-6 lg:px-8">
       <div className="pointer-events-none absolute left-1/2 top-1/2 -z-10 h-[600px] w-[600px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-primary/10 blur-[120px] animate-pulse" />
 
       <div className="z-10 w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-700">

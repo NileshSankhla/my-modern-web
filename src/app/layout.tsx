@@ -13,6 +13,7 @@ import "./globals.css";
 import Providers from "@/components/providers";
 import Navbar from "@/components/navbar";
 import Footer from "@/components/footer";
+import MobileNav from "@/components/mobile-nav";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 
@@ -98,9 +99,16 @@ const RootLayout = ({
             id="booster_root"
             className="relative flex min-h-screen flex-col"
           >
-            <Navbar />
-            <main className="flex-1">{children}</main>
-            <Footer />
+            <div>
+              <Navbar />
+            </div>
+            <main className="flex-1 pb-16 md:pb-0">{children}</main>
+            <div className="hidden md:block">
+              <Footer />
+            </div>
+            <div className="block md:hidden">
+              <MobileNav />
+            </div>
           </div>
         </Providers>
         <Analytics />

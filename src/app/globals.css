@@ -177,13 +177,14 @@ a, button {
 
 /* Base application wrapper to avoid browser quirks */
 html, body {
-  height: var(--app-height);
-  width: 100vw;
+  min-height: var(--app-height);
+  width: 100%;
 }
 
 body {
   /* Stop stretch bounce "rubber-banding" when pulling down from the top */
   overscroll-behavior-y: none;
+  overflow-x: hidden;
   
   /* Account for notches and safe zones on modern phones */
   padding-top: env(safe-area-inset-top);

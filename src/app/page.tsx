@@ -9,6 +9,11 @@ import {
   Store,
   TrendingUp,
   Zap,
+  Wallet,
+  Clock,
+  CheckCircle,
+  ShoppingCart,
+  ReceiptText,
 } from "lucide-react";
 import {
   Card,
@@ -145,6 +150,10 @@ const Page = async () => {
     }
   }
 
+  const totalEarned = trackedItems.reduce((acc, item) => acc + item.rewardAmount, 0) / 100;
+  const pendingEarned = trackedItems.filter(i => i.trackingStatus === "tracked").reduce((acc, item) => acc + item.rewardAmount, 0) / 100;
+  const withdrawnEarned = trackedItems.filter(i => i.trackingStatus === "approved").reduce((acc, item) => acc + item.rewardAmount, 0) / 100;
+
   const marqueeItems =
     featuredHeroMerchants.length > 0
       ? featuredHeroMerchants.map((merchant) => ({ name: merchant.name, rate: merchant.cashbackRate }))
@@ -159,7 +168,96 @@ const Page = async () => {
   const repeatedMarqueeItems = [...marqueeItems, ...marqueeItems];
 
   return (
-    <div className="flex min-h-screen flex-col overflow-hidden">
+    <>
+      {/* Mobile Dashboard View (Logged In Only) */}
+      {user && (
+        <div className="flex md:hidden min-h-[100dvh] w-full flex-col space-y-6 overflow-x-hidden bg-background px-4 pt-6 pb-24">
+      {/* Total Cashback Card */}
+      <div className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-primary/90 to-primary p-6 text-primary-foreground shadow-lg mt-2">
+        <div className="relative z-10">
+          <p className="text-sm font-medium opacity-90">Total Cashback Earned</p>
+          <h2 className="mt-2 text-4xl font-bold">₹{totalEarned.toLocaleString()}</h2>
+          <div className="mt-4 flex items-center text-xs font-medium">
+            <TrendingUp className="mr-1 h-3 w-3" />
+            <span>Keep shopping to earn more!</span>
+          </div>
+        </div>
+        <div className="absolute -right-4 -bottom-4 opacity-20">
+          <Wallet className="h-32 w-32" />
+        </div>
+      </div>
+
+      {/* Pending / Withdrawn Stats */}
+      <div className="grid grid-cols-2 gap-4">
+        <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm">
+          <p className="text-xs font-medium text-muted-foreground">Pending Cashback</p>
+          <div className="mt-1 flex items-center justify-between">
+            <h3 className="text-xl font-bold">₹{pendingEarned.toLocaleString()}</h3>
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-amber-500/10">
+              <Clock className="h-3.5 w-3.5 text-amber-500" />
+            </div>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-border/50 bg-card p-4 shadow-sm">
+          <p className="text-xs font-medium text-muted-foreground">Withdrawn</p>
+          <div className="mt-1 flex items-center justify-between">
+            <h3 className="text-xl font-bold">₹{withdrawnEarned.toLocaleString()}</h3>
+            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500/10">
+              <CheckCircle className="h-3.5 w-3.5 text-green-500" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Quick Actions */}
+      <div>
+        <h3 className="mb-3 text-sm font-bold">Quick Actions</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <Link href="/stores" className="flex flex-col items-center justify-center rounded-2xl border border-border/50 bg-card py-4 transition-colors hover:bg-muted/50">
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+              <ShoppingCart className="h-5 w-5 text-primary" />
+            </div>
+            <span className="text-[11px] font-medium text-muted-foreground">Shop Now</span>
+          </Link>
+          <Link href="/earnings" className="flex flex-col items-center justify-center rounded-2xl border border-border/50 bg-card py-4 transition-colors hover:bg-muted/50">
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+              <ReceiptText className="h-5 w-5 text-primary" />
+            </div>
+            <span className="text-[11px] font-medium text-muted-foreground">My Orders</span>
+          </Link>
+          <Link href="/earnings" className="flex flex-col items-center justify-center rounded-2xl border border-border/50 bg-card py-4 transition-colors hover:bg-muted/50">
+            <div className="mb-2 flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10">
+              <Wallet className="h-5 w-5 text-primary" />
+            </div>
+            <span className="text-[11px] font-medium text-muted-foreground">Withdraw</span>
+          </Link>
+        </div>
+      </div>
+
+      {/* Top Stores */}
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <h3 className="text-sm font-bold">Top Stores</h3>
+          <Link href="/stores" className="text-xs font-semibold text-primary">View All &gt;</Link>
+        </div>
+        <div className="flex gap-4 overflow-x-auto pb-4 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+          {featuredHeroMerchants.map((merchant) => (
+            <Link key={merchant.id} href={merchant.href} className="flex min-w-[120px] flex-col items-center justify-center rounded-2xl border border-border/50 bg-card p-4 text-center shadow-sm transition-transform hover:scale-105">
+              <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-white p-2">
+                <Store className="h-6 w-6 text-black" />
+              </div>
+              <div className="mb-2 text-sm font-bold">{merchant.name}</div>
+              <div className="text-[10px] font-medium text-primary">Upto {merchant.cashbackRate}</div>
+              <div className="text-[9px] text-muted-foreground">Cashback</div>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </div>
+    )}
+
+    {/* Unified Landing Page (Visible to all on Desktop, Logged Out on Mobile) */}
+    <div className={`min-h-screen flex-col overflow-hidden ${user ? "hidden md:flex" : "flex"}`}>
       <section className="relative overflow-hidden border-b border-border/40 pt-32 pb-24 sm:pt-40 sm:pb-32">
         <div className="pointer-events-none absolute inset-0">
           <div className="absolute inset-x-0 top-8 h-24 overflow-hidden opacity-35 sm:top-12 sm:h-32 sm:opacity-40">
@@ -429,6 +527,7 @@ const Page = async () => {
         </div>
       </section>
     </div>
+    </>
   );
 };
 
