@@ -7,7 +7,7 @@ import {
 } from "@/lib/wallet";
 
 export const dynamic = "force-dynamic";
-export const revalidate = 30;
+export const fetchCache = "force-no-store";
 
 export async function GET() {
   try {
@@ -16,20 +16,22 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const [cashbackBalanceInPaise, amazonRewardBalanceInPaise] = await Promise.all([
+    const [cashbackWallet, amazonRewardWallet] = await Promise.all([
       getWalletBalance(user.id, DEFAULT_WALLET_TYPE),
       getWalletBalance(user.id, AMAZON_REWARDS_WALLET_TYPE),
     ]);
 
     return NextResponse.json(
       {
-        cashbackBalanceInPaise,
-        amazonRewardBalanceInPaise,
-        totalBalanceInPaise: cashbackBalanceInPaise + amazonRewardBalanceInPaise,
+        cashbackBalanceInPaise: cashbackWallet.balanceInPaise,
+        amazonRewardBalanceInPaise: amazonRewardWallet.balanceInPaise,
+        totalBalanceInPaise: cashbackWallet.balanceInPaise + amazonRewardWallet.balanceInPaise,
       },
       {
         headers: {
-          "Cache-Control": "private, max-age=30, stale-while-revalidate=60",
+          "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+          "Pragma": "no-cache",
+          "Expires": "0",
         },
       }
     );

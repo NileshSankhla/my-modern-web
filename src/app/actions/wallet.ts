@@ -1,9 +1,9 @@
 "use server";
 
-import { and, eq, ilike, sql } from "drizzle-orm";
+import { and, eq, ilike } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
-import { requireAdminUser } from "@/lib/admin";
+import { requireFinanceManager } from "@/lib/admin";
 import { requireUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
@@ -17,9 +17,8 @@ import {
 import {
   AMAZON_REWARDS_WALLET_TYPE,
   DEFAULT_WALLET_TYPE,
-  adjustWalletBalance,
-  ensureWalletForUser,
-  getWalletBalance,
+  creditWallet,
+  debitWallet,
 } from "@/lib/wallet";
 import {
   adminAmazonGiftCardDecisionSchema,
@@ -59,23 +58,12 @@ const getErrorMessage = (error: unknown): string => {
   if (error instanceof Error && error.message) {
     return error.message;
   }
-
   if (typeof error === "object" && error !== null) {
     const eventLike = error as { message?: unknown; error?: unknown; cause?: unknown };
-
     if (typeof eventLike.message === "string" && eventLike.message.length > 0) {
       return eventLike.message;
     }
-
-    if (eventLike.error instanceof Error && eventLike.error.message) {
-      return eventLike.error.message;
-    }
-
-    if (typeof eventLike.cause === "string" && eventLike.cause.length > 0) {
-      return eventLike.cause;
-    }
   }
-
   return "Failed to update wallet. Please try again.";
 };
 
@@ -105,40 +93,35 @@ export const createWithdrawalRequestAction = async (
       return { error: "Withdrawal amount must be greater than zero." };
     }
 
-    await ensureWalletForUser(user.id, DEFAULT_WALLET_TYPE);
-
-    const balanceInPaise = await getWalletBalance(user.id, DEFAULT_WALLET_TYPE);
-
-    if (balanceInPaise < amountInPaise) {
-      return { error: "Insufficient wallet balance." };
-    }
-
-    const [pendingCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(withdrawalRequests)
-      .where(
-        and(
-          eq(withdrawalRequests.userId, user.id),
-          eq(withdrawalRequests.status, "pending"),
-        ),
-      );
-
-    if ((pendingCount?.count ?? 0) > 0) {
-      return { error: "You already have a pending withdrawal request." };
-    }
-
+    // Step 1: Insert pending request (unique constraint on DB enforces only one pending request per user)
+    let request;
     try {
-      await db.insert(withdrawalRequests).values({
+      [request] = await db.insert(withdrawalRequests).values({
         userId: user.id,
         upiId: validation.data.upiId.toLowerCase(),
         amountInPaise,
         status: "pending",
-      });
+      }).returning();
     } catch (error) {
       if (isUniqueConstraintError(error)) {
         return { error: "You already have a pending withdrawal request." };
       }
       throw error;
+    }
+
+    // Step 2: Attempt debit
+    try {
+      await debitWallet({
+        userId: user.id,
+        walletType: DEFAULT_WALLET_TYPE,
+        amountInPaise,
+        transactionType: "WITHDRAWAL",
+        sourceReference: request.id.toString(),
+      });
+    } catch (err) {
+      // Debit failed (e.g. insufficient funds), rollback request
+      await db.update(withdrawalRequests).set({ status: "rejected", adminNote: "Insufficient funds at time of processing" }).where(eq(withdrawalRequests.id, request.id));
+      return { error: getErrorMessage(err) };
     }
 
     revalidatePath("/dashboard");
@@ -176,39 +159,33 @@ export const createAmazonGiftCardRequestAction = async (
       return { error: "Gift card conversion amount must be greater than zero." };
     }
 
-    await ensureWalletForUser(user.id, AMAZON_REWARDS_WALLET_TYPE);
-
-    const balanceInPaise = await getWalletBalance(user.id, AMAZON_REWARDS_WALLET_TYPE);
-
-    if (balanceInPaise < amountInPaise) {
-      return { error: "Insufficient Amazon rewards balance." };
-    }
-
-    const [pendingCount] = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(amazonGiftCardRequests)
-      .where(
-        and(
-          eq(amazonGiftCardRequests.userId, user.id),
-          eq(amazonGiftCardRequests.status, "pending"),
-        ),
-      );
-
-    if ((pendingCount?.count ?? 0) > 0) {
-      return { error: "You already have a pending Amazon gift card request." };
-    }
-
+    // Insert pending request (unique constraint on DB enforces only one pending request per user)
+    let request;
     try {
-      await db.insert(amazonGiftCardRequests).values({
+      [request] = await db.insert(amazonGiftCardRequests).values({
         userId: user.id,
         amountInPaise,
         status: "pending",
-      });
+      }).returning();
     } catch (error) {
       if (isUniqueConstraintError(error)) {
         return { error: "You already have a pending Amazon gift card request." };
       }
       throw error;
+    }
+
+    // Step 2: Debit wallet
+    try {
+      await debitWallet({
+        userId: user.id,
+        walletType: AMAZON_REWARDS_WALLET_TYPE,
+        amountInPaise,
+        transactionType: "GIFT_CARD_PURCHASE",
+        sourceReference: request.id.toString(),
+      });
+    } catch (err) {
+      await db.update(amazonGiftCardRequests).set({ status: "rejected", adminNote: "Insufficient funds at time of processing" }).where(eq(amazonGiftCardRequests.id, request.id));
+      return { error: getErrorMessage(err) };
     }
 
     revalidatePath("/dashboard");
@@ -226,13 +203,14 @@ export const adminAdjustWalletAction = async (
   formData: FormData,
 ): Promise<WalletActionState> => {
   try {
-    const admin = await requireAdminUser();
+    const admin = await requireFinanceManager();
 
     const payload = {
       userEmail: getString(formData.get("userEmail")).trim().toLowerCase(),
       walletType: getString(formData.get("walletType")),
       type: getString(formData.get("type")),
       amount: getString(formData.get("amount")).trim(),
+      idempotencyKey: getString(formData.get("idempotencyKey")),
     };
 
     const validation = walletAdjustmentSchema.safeParse(payload);
@@ -241,6 +219,10 @@ export const adminAdjustWalletAction = async (
         error: "Please correct the highlighted fields.",
         fieldErrors: validation.error.flatten().fieldErrors,
       };
+    }
+
+    if (!validation.data.idempotencyKey) {
+      return { error: "Missing idempotency key for secure transaction processing." };
     }
 
     const [targetUser] = await db
@@ -259,19 +241,32 @@ export const adminAdjustWalletAction = async (
       return { error: "Amount must be greater than zero." };
     }
 
-    await ensureWalletForUser(targetUser.id, validation.data.walletType);
-
-    await adjustWalletBalance({
-      userId: targetUser.id,
-      adminUserId: admin.id,
-      walletType: validation.data.walletType,
-      type: validation.data.type,
-      amountInPaise,
-      note: `Manual ${validation.data.type === "credit" ? "credit" : "debit"} adjustment by ${admin.email}`,
-    });
+    if (validation.data.type === "credit") {
+      await creditWallet({
+        userId: targetUser.id,
+        actorId: admin.id,
+        walletType: validation.data.walletType as any,
+        amountInPaise,
+        transactionType: "MANUAL_CREDIT",
+        sourceReference: `Manual credit adjustment by ${admin.email}`,
+        idempotencyKey: validation.data.idempotencyKey,
+      });
+    } else {
+      await debitWallet({
+        userId: targetUser.id,
+        actorId: admin.id,
+        walletType: validation.data.walletType as any,
+        amountInPaise,
+        transactionType: "MANUAL_DEBIT",
+        sourceReference: `Manual debit adjustment by ${admin.email}`,
+        idempotencyKey: validation.data.idempotencyKey,
+      });
+    }
 
     revalidatePath("/admin");
     revalidatePath("/dashboard");
+    revalidatePath("/finance");
+    revalidatePath("/");
 
     return { success: `Wallet updated successfully. ${validation.data.type === "credit" ? "+" : "-"}${validation.data.amount} ${validation.data.walletType === "cashback" ? "Cashback" : "Amazon Rewards"}.` };
   } catch (error) {
@@ -287,7 +282,7 @@ export const adminProcessAmazonGiftCardRequestAction = async (
   formData: FormData,
 ): Promise<WalletActionState> => {
   try {
-    const admin = await requireAdminUser();
+    const admin = await requireFinanceManager();
 
     const payload = {
       requestId: getString(formData.get("requestId")),
@@ -316,125 +311,95 @@ export const adminProcessAmazonGiftCardRequestAction = async (
       return { error: "Amazon gift card request not found." };
     }
 
-    if (validation.data.decision === "reject") {
-      if (request.status === "fulfilled") {
-        return { error: "Fulfilled requests cannot be rejected." };
-      }
-      if (request.status === "rejected") {
-        return { error: "Request is already rejected." };
-      }
+    if (validation.data.decision === "approve" && request.status !== "pending") {
+      return { error: "Only pending requests can be approved." };
+    }
 
-      await db
+    if (validation.data.decision === "reject" && request.status !== "pending") {
+      return { error: "Only pending requests can be rejected." };
+    }
+
+    if (validation.data.decision === "fulfill" && request.status !== "approved" && request.status !== "pending") {
+      return { error: "Only pending or approved requests can be marked as fulfilled." };
+    }
+
+    // Verify the original debit actually exists! (Prevents crash exploit)
+    if (validation.data.decision === "approve" || validation.data.decision === "reject" || validation.data.decision === "fulfill") {
+      const [originalDebit] = await db
+        .select()
+        .from(walletTransactions)
+        .where(eq(walletTransactions.note, request.id.toString()))
+        .limit(1);
+
+      if (!originalDebit) {
+        await db
+          .update(amazonGiftCardRequests)
+          .set({
+            status: "rejected",
+            adminNote: "System Auto-Reject: Ledger debit missing due to processing error.",
+            processedByAdminId: admin.id,
+            processedAt: new Date(),
+          })
+          .where(and(eq(amazonGiftCardRequests.id, request.id), eq(amazonGiftCardRequests.status, request.status)));
+        return { error: "Invalid request. Funds were never deducted. Auto-rejected." };
+      }
+    }
+
+    if (validation.data.decision === "reject" || validation.data.decision === "approve") {
+      // Optimistic Concurrency Update (Prevents double refunds)
+      const [updatedRequest] = await db
         .update(amazonGiftCardRequests)
         .set({
-          status: "rejected",
+          status: validation.data.decision === "approve" ? "approved" : "rejected",
           adminNote: validation.data.note || null,
           processedByAdminId: admin.id,
           processedAt: new Date(),
         })
-        .where(eq(amazonGiftCardRequests.id, request.id));
+        .where(and(eq(amazonGiftCardRequests.id, request.id), eq(amazonGiftCardRequests.status, "pending")))
+        .returning();
 
-      revalidatePath("/admin");
-      revalidatePath("/dashboard");
-      return { success: "Amazon gift card request rejected." };
-    }
-
-    if (validation.data.decision === "approve") {
-      if (request.status === "approved") {
-        return { success: "Amazon gift card request is already approved." };
-      }
-      if (request.status !== "pending") {
-        return { error: "Only pending requests can be approved." };
+      if (!updatedRequest) {
+        return { error: "Request was already processed." };
       }
 
-      try {
-        await db.transaction(async (tx) => {
-          await adjustWalletBalance({
-            userId: request.userId,
-            adminUserId: admin.id,
-            walletType: AMAZON_REWARDS_WALLET_TYPE,
-            type: "debit",
-            amountInPaise: request.amountInPaise,
-            note: `Amazon gift card request #${request.id}`,
-          }, tx);
-
-          await tx
-            .update(amazonGiftCardRequests)
-            .set({
-              status: "approved",
-              adminNote: validation.data.note || null,
-              processedByAdminId: admin.id,
-              processedAt: new Date(),
-            })
-            .where(eq(amazonGiftCardRequests.id, request.id));
+      if (validation.data.decision === "reject") {
+        await creditWallet({
+          userId: updatedRequest.userId,
+          actorId: admin.id,
+          walletType: AMAZON_REWARDS_WALLET_TYPE,
+          amountInPaise: updatedRequest.amountInPaise,
+          transactionType: "REFUND",
+          sourceReference: `Rejected Amazon gift card request #${updatedRequest.id}`,
+          idempotencyKey: `giftcard_reject_${updatedRequest.id}`,
         });
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : "Failed to reserve Amazon rewards." };
       }
 
       revalidatePath("/admin");
+      revalidatePath("/finance");
       revalidatePath("/dashboard");
-      return { success: "Amazon gift card request approved." };
+      return { success: `Gift card request ${validation.data.decision === "approve" ? "approved" : "rejected and refunded"}.` };
     }
 
-    if (!validation.data.giftCardCode) {
-      return { error: "Gift card code is required to fulfill the request." };
-    }
-
-    if (request.status === "fulfilled") {
-      return { error: "Request is already fulfilled." };
-    }
-
-    if (request.status === "rejected") {
-      return { error: "Rejected requests cannot be fulfilled." };
-    }
-
-    if (request.status === "pending") {
-      try {
-        await db.transaction(async (tx) => {
-          await adjustWalletBalance({
-            userId: request.userId,
-            adminUserId: admin.id,
-            walletType: AMAZON_REWARDS_WALLET_TYPE,
-            type: "debit",
-            amountInPaise: request.amountInPaise,
-            note: `Amazon gift card request #${request.id}`,
-          }, tx);
-
-          await tx
-            .update(amazonGiftCardRequests)
-            .set({
-              status: "fulfilled",
-              giftCardCode: validation.data.giftCardCode,
-              adminNote: validation.data.note || null,
-              processedByAdminId: admin.id,
-              processedAt: new Date(),
-            })
-            .where(eq(amazonGiftCardRequests.id, request.id));
-        });
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : "Failed to reserve Amazon rewards." };
-      }
-
-      revalidatePath("/admin");
-      revalidatePath("/dashboard");
-      return { success: "Amazon gift card issued successfully." };
-    }
-
-    await db
+    const [updated] = await db
       .update(amazonGiftCardRequests)
       .set({
         status: "fulfilled",
-        giftCardCode: validation.data.giftCardCode,
+        giftCardCode: validation.data.giftCardCode || null,
         adminNote: validation.data.note || null,
         processedByAdminId: admin.id,
         processedAt: new Date(),
       })
-      .where(eq(amazonGiftCardRequests.id, request.id));
+      .where(and(eq(amazonGiftCardRequests.id, request.id), eq(amazonGiftCardRequests.status, request.status)))
+      .returning();
+
+    if (!updated) {
+      return { error: "Request was already processed." };
+    }
 
     revalidatePath("/admin");
+    revalidatePath("/finance");
     revalidatePath("/dashboard");
-    return { success: "Amazon gift card issued successfully." };
+    return { success: "Gift card marked as fulfilled." };
   } catch (error) {
     console.error("Admin process Amazon gift card request error:", error);
     return { error: "Failed to process Amazon gift card request." };
@@ -450,7 +415,7 @@ const adminProcessWithdrawalAction = async (
   formData: FormData,
 ): Promise<WalletActionState> => {
   try {
-    const admin = await requireAdminUser();
+    const admin = await requireFinanceManager();
 
     const payload = {
       requestId: getString(formData.get("requestId")),
@@ -486,57 +451,70 @@ const adminProcessWithdrawalAction = async (
       return { error: "Only pending requests can be rejected." };
     }
 
-    if (validation.data.decision === "mark-paid" && request.status !== "approved") {
-      return { error: "Only approved requests can be marked as paid." };
+    if (validation.data.decision === "mark-paid" && request.status !== "approved" && request.status !== "pending") {
+      return { error: "Only pending or approved requests can be marked as paid." };
     }
 
-    if (validation.data.decision === "reject") {
-      await db
+    // Verify the original debit actually exists! (Prevents crash exploit)
+    if (validation.data.decision === "approve" || validation.data.decision === "reject" || validation.data.decision === "mark-paid") {
+      const [originalDebit] = await db
+        .select()
+        .from(walletTransactions)
+        .where(eq(walletTransactions.note, request.id.toString()))
+        .limit(1);
+
+      if (!originalDebit) {
+        // Free money exploit prevented! The original debit never happened.
+        await db
+          .update(withdrawalRequests)
+          .set({
+            status: "rejected",
+            adminNote: "System Auto-Reject: Ledger debit missing due to processing error.",
+            processedByAdminId: admin.id,
+            processedAt: new Date(),
+          })
+          .where(and(eq(withdrawalRequests.id, request.id), eq(withdrawalRequests.status, request.status)));
+        return { error: "Invalid request. Funds were never deducted. Auto-rejected." };
+      }
+    }
+
+    if (validation.data.decision === "reject" || validation.data.decision === "approve") {
+      // Optimistic Concurrency Update (Prevents double refunds)
+      const [updatedRequest] = await db
         .update(withdrawalRequests)
         .set({
-          status: "rejected",
+          status: validation.data.decision === "approve" ? "approved" : "rejected",
           adminNote: validation.data.note || null,
           processedByAdminId: admin.id,
           processedAt: new Date(),
         })
-        .where(eq(withdrawalRequests.id, request.id));
+        .where(and(eq(withdrawalRequests.id, request.id), eq(withdrawalRequests.status, "pending")))
+        .returning();
 
-      revalidatePath("/admin");
-      revalidatePath("/dashboard");
-      return { success: "Withdrawal request rejected." };
-    }
+      if (!updatedRequest) {
+        return { error: "Request was already processed." };
+      }
 
-    if (validation.data.decision === "approve") {
-      try {
-        await db.transaction(async (tx) => {
-          await adjustWalletBalance({
-            userId: request.userId,
-            adminUserId: admin.id,
-            type: "debit",
-            amountInPaise: request.amountInPaise,
-            note: `Withdrawal approved (#${request.id})`,
-          }, tx);
-
-          await tx
-            .update(withdrawalRequests)
-            .set({
-              status: "approved",
-              adminNote: validation.data.note || null,
-              processedByAdminId: admin.id,
-              processedAt: new Date(),
-            })
-            .where(eq(withdrawalRequests.id, request.id));
+      if (validation.data.decision === "reject") {
+        // Money was deducted during request, must refund
+        await creditWallet({
+          userId: updatedRequest.userId,
+          actorId: admin.id,
+          walletType: DEFAULT_WALLET_TYPE,
+          amountInPaise: updatedRequest.amountInPaise,
+          transactionType: "WITHDRAWAL_REVERSAL",
+          sourceReference: `Rejected withdrawal request #${updatedRequest.id}`,
+          idempotencyKey: `withdrawal_reject_${updatedRequest.id}`,
         });
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : "Failed to approve withdrawal." };
       }
 
       revalidatePath("/admin");
+      revalidatePath("/finance");
       revalidatePath("/dashboard");
-      return { success: "Withdrawal approved. Wallet debited." };
+      return { success: `Withdrawal request ${validation.data.decision === "approve" ? "approved" : "rejected and refunded"}.` };
     }
 
-    await db
+    const [updated] = await db
       .update(withdrawalRequests)
       .set({
         status: "paid",
@@ -544,9 +522,16 @@ const adminProcessWithdrawalAction = async (
         processedByAdminId: admin.id,
         processedAt: new Date(),
       })
-      .where(eq(withdrawalRequests.id, request.id));
+      .where(and(eq(withdrawalRequests.id, request.id), eq(withdrawalRequests.status, request.status)))
+      .returning();
+
+    if (!updated) {
+      return { error: "Request was already processed." };
+    }
 
     revalidatePath("/admin");
+    revalidatePath("/finance");
+    revalidatePath("/dashboard");
     return { success: "Withdrawal marked as paid." };
   } catch (error) {
     console.error("Admin process withdrawal error:", error);
@@ -560,7 +545,7 @@ export const adminProcessWithdrawalFormAction = async (formData: FormData) => {
 
 export const adminMarkClickTrackedFormAction = async (formData: FormData) => {
   try {
-    const admin = await requireAdminUser();
+    const admin = await requireFinanceManager();
 
     const payload = {
       clickId: getString(formData.get("clickId")),
@@ -581,17 +566,28 @@ export const adminMarkClickTrackedFormAction = async (formData: FormData) => {
       return;
     }
 
+    // Optional: finance manager can pre-set expected reward amount (in rupees)
+    const expectedRewardStr = getString(formData.get("expectedReward")).trim();
+    const expectedRewardPaise = expectedRewardStr
+      ? parseRupeesToPaise(expectedRewardStr)
+      : undefined;
+
     await db
       .update(clicks)
       .set({
         trackingStatus: "tracked",
         reviewedByAdminId: admin.id,
         reviewedAt: new Date(),
+        ...(expectedRewardPaise && expectedRewardPaise > 0
+          ? { rewardAmountInPaise: expectedRewardPaise }
+          : {}),
       })
       .where(eq(clicks.id, click.id));
 
     revalidatePath("/admin");
     revalidatePath("/");
+    revalidatePath("/finance");
+    revalidatePath("/earnings");
   } catch (error) {
     console.error("Admin mark click tracked error:", error);
   }
@@ -599,7 +595,7 @@ export const adminMarkClickTrackedFormAction = async (formData: FormData) => {
 
 export const adminUndoTrackedClickFormAction = async (formData: FormData) => {
   try {
-    await requireAdminUser();
+    await requireFinanceManager();
 
     const payload = {
       clickId: getString(formData.get("clickId")),
@@ -616,7 +612,7 @@ export const adminUndoTrackedClickFormAction = async (formData: FormData) => {
       .where(eq(clicks.id, validation.data.clickId))
       .limit(1);
 
-    if (!click || click.trackingStatus !== "tracked") {
+    if (!click || (click.trackingStatus !== "tracked" && click.trackingStatus !== "deleted")) {
       return;
     }
 
@@ -631,6 +627,7 @@ export const adminUndoTrackedClickFormAction = async (formData: FormData) => {
 
     revalidatePath("/admin");
     revalidatePath("/");
+    revalidatePath("/finance");
   } catch (error) {
     console.error("Admin undo tracked click error:", error);
   }
@@ -638,7 +635,7 @@ export const adminUndoTrackedClickFormAction = async (formData: FormData) => {
 
 export const adminApproveClickFormAction = async (formData: FormData) => {
   try {
-    const admin = await requireAdminUser();
+    const admin = await requireFinanceManager();
 
     const payload = {
       clickId: getString(formData.get("clickId")),
@@ -652,8 +649,9 @@ export const adminApproveClickFormAction = async (formData: FormData) => {
     }
 
     const amountInPaise = parseRupeesToPaise(validation.data.amount);
+
     if (amountInPaise <= 0) {
-      return;
+      throw new Error("Amount must be strictly positive. Use Reversal or Manual Debit for penalties.");
     }
 
     const [clickWithMerchant] = await db
@@ -672,57 +670,38 @@ export const adminApproveClickFormAction = async (formData: FormData) => {
       return;
     }
 
-    const [existingRewardTransaction] = await db
-      .select({ id: walletTransactions.id })
-      .from(walletTransactions)
-      .where(eq(walletTransactions.sourceClickId, click.id))
-      .limit(1);
-
-    if (existingRewardTransaction) {
-      return;
-    }
-
     const walletType = validation.data.walletType
       ?? (clickWithMerchant?.merchantName?.trim().toLowerCase() === "amazon"
         ? AMAZON_REWARDS_WALLET_TYPE
         : DEFAULT_WALLET_TYPE);
 
-    try {
-      await db.transaction(async (tx) => {
-        await adjustWalletBalance({
-          userId: click.userId,
-          adminUserId: admin.id,
-          walletType,
-          type: "credit",
-          amountInPaise,
-          note: `Approved ${walletType === AMAZON_REWARDS_WALLET_TYPE ? "Amazon reward" : "cashback"} for click ${click.id}`,
-          sourceClickId: click.id,
-        }, tx);
+    // Credit the wallet directly. The strict idempotency inside creditWallet prevents double processing.
+    await creditWallet({
+      userId: click.userId,
+      actorId: admin.id,
+      walletType: walletType as any,
+      amountInPaise,
+      transactionType: "CASHBACK",
+      sourceReference: click.id,
+      sourceType: "click",
+      idempotencyKey: `click_approve_${click.id}`,
+    });
 
-        await tx
-          .update(clicks)
-          .set({
-            trackingStatus: "approved",
-            rewardAmountInPaise: amountInPaise,
-            reviewedByAdminId: admin.id,
-            reviewedAt: new Date(),
-          })
-          .where(eq(clicks.id, click.id));
-      });
-    } catch (err) {
-      if (err instanceof Error && err.message === "Reward already processed for this click.") {
-        return;
-      }
-      if (isUniqueConstraintError(err)) {
-        return;
-      }
-      console.error("Transaction error in approve click:", err);
-      return;
-    }
+    await db
+      .update(clicks)
+      .set({
+        trackingStatus: "approved",
+        rewardAmountInPaise: amountInPaise,
+        reviewedByAdminId: admin.id,
+        reviewedAt: new Date(),
+      })
+      .where(eq(clicks.id, click.id));
 
     revalidatePath("/admin");
     revalidatePath("/");
     revalidatePath("/dashboard");
+    revalidatePath("/finance");
+    revalidatePath("/earnings");
   } catch (error) {
     console.error("Admin approve click error:", error);
   }
@@ -730,7 +709,7 @@ export const adminApproveClickFormAction = async (formData: FormData) => {
 
 export const adminUndoApprovedClickFormAction = async (formData: FormData) => {
   try {
-    const admin = await requireAdminUser();
+    const admin = await requireFinanceManager();
 
     const payload = {
       clickId: getString(formData.get("clickId")),
@@ -765,38 +744,33 @@ export const adminUndoApprovedClickFormAction = async (formData: FormData) => {
       return;
     }
 
-    try {
-      await db.transaction(async (tx) => {
-        await adjustWalletBalance({
-          userId: click.userId,
-          adminUserId: admin.id,
-          walletType: rewardTransaction.walletType,
-          type: "debit",
-          amountInPaise: rewardTransaction.amountInPaise,
-          note: `Undo approved ${rewardTransaction.walletType === AMAZON_REWARDS_WALLET_TYPE ? "Amazon reward" : "cashback"} for click ${click.id}`,
-          sourceClickId: undefined,
-        }, tx);
+    // Never delete ledger rows! Append a reversal debit instead.
+    await debitWallet({
+      userId: click.userId,
+      actorId: admin.id,
+      walletType: rewardTransaction.walletType as any,
+      amountInPaise: rewardTransaction.amountInPaise,
+      transactionType: "REVERSAL_DEBIT",
+      sourceReference: `Reversal of click ${click.id}`,
+      sourceType: "reversal",
+      idempotencyKey: `click_undo_${click.id}`,
+    });
 
-        await tx.delete(walletTransactions).where(eq(walletTransactions.id, rewardTransaction.id));
-
-        await tx
-          .update(clicks)
-          .set({
-            trackingStatus: "tracked",
-            rewardAmountInPaise: 0,
-            reviewedByAdminId: admin.id,
-            reviewedAt: new Date(),
-          })
-          .where(eq(clicks.id, click.id));
-      });
-    } catch (err) {
-      console.error("Transaction error in undo approve click:", err);
-      return;
-    }
+    await db
+      .update(clicks)
+      .set({
+        trackingStatus: "tracked",
+        rewardAmountInPaise: 0,
+        reviewedByAdminId: admin.id,
+        reviewedAt: new Date(),
+      })
+      .where(eq(clicks.id, click.id));
 
     revalidatePath("/admin");
     revalidatePath("/");
     revalidatePath("/dashboard");
+    revalidatePath("/finance");
+    revalidatePath("/earnings");
   } catch (error) {
     console.error("Admin undo approved click error:", error);
   }
@@ -804,7 +778,7 @@ export const adminUndoApprovedClickFormAction = async (formData: FormData) => {
 
 export const adminDeleteUnreviewedClickFormAction = async (formData: FormData) => {
   try {
-    const admin = await requireAdminUser();
+    const admin = await requireFinanceManager();
 
     const payload = {
       clickId: getString(formData.get("clickId")),
@@ -836,6 +810,7 @@ export const adminDeleteUnreviewedClickFormAction = async (formData: FormData) =
 
     revalidatePath("/admin");
     revalidatePath("/");
+    revalidatePath("/finance");
   } catch (error) {
     console.error("Admin delete unreviewed click error:", error);
   }
@@ -843,7 +818,7 @@ export const adminDeleteUnreviewedClickFormAction = async (formData: FormData) =
 
 export const adminPermanentlyDeleteAllDeletedClicksFormAction = async () => {
   try {
-    await requireAdminUser();
+    await requireFinanceManager();
 
     await db.delete(clicks).where(eq(clicks.trackingStatus, "deleted"));
 
@@ -856,7 +831,7 @@ export const adminPermanentlyDeleteAllDeletedClicksFormAction = async () => {
 
 export const adminRestoreDeletedClickFormAction = async (formData: FormData) => {
   try {
-    await requireAdminUser();
+    await requireFinanceManager();
 
     const payload = {
       clickId: getString(formData.get("clickId")),

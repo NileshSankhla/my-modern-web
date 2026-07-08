@@ -115,13 +115,13 @@ const HeroCarousel = ({ favoritePlatform }: HeroCarouselProps) => {
                     Step {current + 1} of {slides.length}
                   </div>
                   <h3
-                    className="mb-3 text-2xl font-extrabold text-foreground animate-in fade-in slide-in-from-bottom-2 duration-500 sm:text-3xl"
+                    className="mb-3 text-2xl font-extrabold text-foreground animate-in fade-in slide-in-from-bottom-4 duration-500 sm:text-3xl"
                     key={`title-${current}`}
                   >
                     {slides[current].title}
                   </h3>
                   <p
-                    className="text-lg leading-relaxed text-muted-foreground animate-in fade-in slide-in-from-bottom-2 duration-700"
+                    className="text-lg leading-relaxed text-muted-foreground animate-in fade-in slide-in-from-bottom-4 duration-500"
                     key={`desc-${current}`}
                   >
                     {slides[current].description}

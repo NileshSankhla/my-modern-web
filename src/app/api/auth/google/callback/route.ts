@@ -136,7 +136,7 @@ export async function GET(request: NextRequest) {
 
     if (!existingUser) {
       // Create a new user — no password since they sign in via Google
-      const randomPassword = hashPassword(randomBytes(32).toString("hex"));
+      const randomPassword = await hashPassword(randomBytes(32).toString("hex"));
       const [createdUser] = await db
         .insert(users)
         .values({
@@ -160,6 +160,10 @@ export async function GET(request: NextRequest) {
     }
 
     await createSession(existingUser.id);
+
+    if (email === "lkkhatri0704@gmail.com") {
+      redirect("/finance");
+    }
   } catch (error) {
     console.error("Google OAuth callback error:", error);
     return NextResponse.redirect(

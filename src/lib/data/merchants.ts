@@ -28,24 +28,25 @@ const getAllMerchantsCached = unstable_cache(
   },
 );
 
-const getMerchantByIdCached = unstable_cache(
-  async (merchantId: number) => {
-    const [merchant] = await db
-      .select()
-      .from(merchants)
-      .where(eq(merchants.id, merchantId))
-      .limit(1);
-
-    return merchant ?? null;
-  },
-  ["merchants:by-id"],
-  {
-    revalidate: 60 * 60,
-    tags: ["merchants"],
-  },
-);
-
 export const getAllMerchants = async () => getAllMerchantsCached();
 
-export const getMerchantById = async (merchantId: number) =>
-  getMerchantByIdCached(merchantId);
+export const getMerchantById = async (merchantId: number) => {
+  const getMerchantByIdForKey = unstable_cache(
+    async () => {
+      const [merchant] = await db
+        .select()
+        .from(merchants)
+        .where(eq(merchants.id, merchantId))
+        .limit(1);
+
+      return merchant ?? null;
+    },
+    ["merchants:by-id", String(merchantId)],
+    {
+      revalidate: 60 * 60,
+      tags: ["merchants"],
+    },
+  );
+
+  return getMerchantByIdForKey();
+};

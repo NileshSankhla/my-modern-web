@@ -40,3 +40,17 @@ export const requireAdminUser = async () => {
 
   redirect("/dashboard");
 };
+
+export const requireFinanceManager = async () => {
+  const user = await getCurrentUser();
+
+  if (!user) {
+    redirect("/sign-in?redirect=/finance");
+  }
+
+  if (user.isAdmin || user.isFinanceManager || isConfiguredAdminEmail(user.email)) {
+    return user;
+  }
+
+  redirect("/dashboard");
+};

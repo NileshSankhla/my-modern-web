@@ -1,331 +1,697 @@
-import "server-only";
+/**
+ * Fareback Wallet Module
+ *
+ * Implements append-only ledger with mandatory sequence numbers.
+ * All financial mutations go through this module.
+ *
+ * INVARIANTS:
+ * 1. Every wallet_transaction has a non-null wallet_id, sequence_number, balance_after_in_paise
+ * 2. sequence_number is monotonically increasing per wallet
+ * 3. balance_after_in_paise = previous balance +/- amount_in_paise
+ * 4. balance_after_in_paise >= 0 (enforced by DB constraint)
+ *
+ * CONCURRENCY: Uses SELECT ... FOR UPDATE to prevent race conditions.
+ */
 
-import { and, eq, gte, sql } from "drizzle-orm";
+import { db } from "./db";
+import { walletTransactions, wallets, auditLogs } from "./db/schema";
+import { eq, sql, and, desc } from "drizzle-orm";
+import { createId } from "@paralleldrive/cuid2";
+import { Redis } from "@upstash/redis";
+import { z } from "zod";
 
-import { db } from "@/lib/db";
-import {
-  walletTransactions,
-  walletTypeEnum,
-  wallets,
-  type walletTransactionTypeEnum,
-} from "@/lib/db/schema";
+// Constants
+export const DEFAULT_WALLET_TYPE = "cashback";
+export const AMAZON_REWARDS_WALLET_TYPE = "amazon_rewards";
+// Initialize Redis for idempotency
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
 
-const clampToPaise = (value: number) => Math.max(0, Math.round(value));
+// Constants
+const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60; // 24 hours
+const MINIMUM_WITHDRAWAL_PAISE = 100; // ₹1
+const MAXIMUM_WITHDRAWAL_PAISE = 5000000; // ₹50,000
 
-const isUniqueConstraintError = (error: unknown) =>
-  typeof error === "object"
-  && error !== null
-  && "code" in error
-  && (error as { code?: string }).code === "23505";
+// Types
+export type WalletType = "cashback" | "amazon_rewards";
+export type TransactionType =
+  | "CASHBACK"
+  | "BONUS"
+  | "REFUND"
+  | "MANUAL_CREDIT"
+  | "REVERSAL_CREDIT"
+  | "WITHDRAWAL"
+  | "WITHDRAWAL_REVERSAL"
+  | "MANUAL_DEBIT"
+  | "REVERSAL_DEBIT"
+  | "GIFT_CARD_PURCHASE";
 
-const collectErrorText = (error: unknown): string => {
-  if (error instanceof Error) {
-    return `${error.message} ${error.stack ?? ""}`;
-  }
+interface LedgerEntry {
+  id: number;
+  walletId: number;
+  userId: number;
+  transactionType: TransactionType;
+  amountInPaise: number;
+  balanceAfterInPaise: number;
+  sequenceNumber: number;
+  sourceReference: string | null;
+  sourceType: string | null;
+  idempotencyKey: string | null;
+  metadata: Record<string, unknown> | null;
+  ipAddress: string | null;
+  userAgent: string | null;
+}
 
-  if (typeof error === "string") {
-    return error;
-  }
+interface MutationResult {
+  success: boolean;
+  transaction: LedgerEntry;
+  previousBalance: number;
+  newBalance: number;
+}
 
-  if (typeof error !== "object" || error === null) {
-    return String(error);
-  }
+interface IdempotencyCheckResult {
+  isDuplicate: boolean;
+  cachedResponse?: MutationResult;
+}
 
-  const eventLike = error as {
-    message?: unknown;
-    stack?: unknown;
-    type?: unknown;
-    error?: unknown;
-    cause?: unknown;
-  };
+// Zod schemas for validation
+export const CreditRequestSchema = z.object({
+  userId: z.number().int().positive(),
+  walletType: z.enum(["cashback", "amazon_rewards"]),
+  amountInPaise: z.number().int().positive(),
+  transactionType: z.enum([
+    "CASHBACK",
+    "BONUS",
+    "REFUND",
+    "MANUAL_CREDIT",
+    "REVERSAL_CREDIT",
+    "WITHDRAWAL_REVERSAL",
+  ]),
+  sourceReference: z.string().nullable().optional(),
+  sourceType: z.string().nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  actorId: z.number().int().positive().nullable().optional(), // For audit - who triggered this
+});
 
-  const parts = [
-    typeof eventLike.message === "string" ? eventLike.message : "",
-    typeof eventLike.stack === "string" ? eventLike.stack : "",
-    typeof eventLike.type === "string" ? eventLike.type : "",
+export const DebitRequestSchema = z.object({
+  userId: z.number().int().positive(),
+  walletType: z.enum(["cashback", "amazon_rewards"]),
+  amountInPaise: z.number().int().positive(),
+  transactionType: z.enum(["WITHDRAWAL", "MANUAL_DEBIT", "REVERSAL_DEBIT", "GIFT_CARD_PURCHASE"]),
+  sourceReference: z.string().nullable().optional(),
+  sourceType: z.string().nullable().optional(),
+  idempotencyKey: z.string().nullable().optional(),
+  metadata: z.record(z.string(), z.unknown()).nullable().optional(),
+  actorId: z.number().int().positive().nullable().optional(),
+});
+
+// Helper: Determine if transaction type is a credit
+function isCreditType(type: TransactionType): boolean {
+  const creditTypes: TransactionType[] = [
+    "CASHBACK",
+    "BONUS",
+    "REFUND",
+    "MANUAL_CREDIT",
+    "REVERSAL_CREDIT",
   ];
+  return creditTypes.includes(type);
+}
 
-  if (eventLike.error !== undefined) {
-    parts.push(collectErrorText(eventLike.error));
+// Helper: Get and lock existing wallet, or create and lock if new
+async function getLockedWallet(
+  userId: number,
+  walletType: WalletType,
+  tx: any,
+): Promise<{ id: number; balanceInPaise: number; lastLedgerSequence: number }> {
+  let [wallet] = await tx
+    .select()
+    .from(wallets)
+    .where(and(eq(wallets.userId, userId), eq(wallets.walletType, walletType)))
+    .for("update")
+    .limit(1);
+
+  if (!wallet) {
+    await tx.insert(wallets).values({
+      userId,
+      walletType,
+      balanceInPaise: 0,
+      lastLedgerSequence: 0,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }).onConflictDoNothing();
+
+    [wallet] = await tx
+      .select()
+      .from(wallets)
+      .where(and(eq(wallets.userId, userId), eq(wallets.walletType, walletType)))
+      .for("update")
+      .limit(1);
   }
 
-  if (eventLike.cause !== undefined) {
-    parts.push(collectErrorText(eventLike.cause));
+  return {
+    id: wallet.id,
+    balanceInPaise: wallet.balanceInPaise,
+    lastLedgerSequence: wallet.lastLedgerSequence,
+  };
+}
+
+// Helper: Check idempotency in Redis
+async function checkIdempotency(
+  idempotencyKey: string | null | undefined,
+): Promise<IdempotencyCheckResult> {
+  if (!idempotencyKey) {
+    return { isDuplicate: false };
   }
 
-  return parts.filter(Boolean).join(" ");
-};
+  const redisKey = `idempotency:${idempotencyKey}`;
+  const cached = await redis.get(redisKey);
 
-const isTransactionTransportError = (error: unknown) => {
-  const details = collectErrorText(error).toLowerCase();
+  if (cached) {
+    const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached as any;
+    if (parsed.status === "complete") {
+      return {
+        isDuplicate: true,
+        cachedResponse: parsed.response as MutationResult,
+      };
+    }
+    if (parsed.status === "processing") {
+      // Still processing - this could be a duplicate request
+      // Return conflict to let client retry after a delay
+      throw new IdempotencyConflictError(idempotencyKey);
+    }
+  }
 
-  return (
-    details.includes("no transactions support in neon-http driver")
-    || details.includes("unexpected server response: 101")
-    || details.includes("websocket")
+  return { isDuplicate: false };
+}
+
+// Helper: Mark idempotency as processing
+async function markIdempotencyProcessing(
+  idempotencyKey: string,
+): Promise<void> {
+  const redisKey = `idempotency:${idempotencyKey}`;
+  const setResult = await redis.set(
+    redisKey,
+    JSON.stringify({
+      status: "processing",
+      startedAt: new Date().toISOString(),
+    }),
+    { nx: true, ex: IDEMPOTENCY_TTL_SECONDS },
   );
-};
 
-const adjustWalletBalanceWithAtomicCte = async (
+  if (!setResult) {
+    // Key already exists - another process is handling this
+    throw new IdempotencyConflictError(idempotencyKey);
+  }
+}
+
+// Helper: Complete idempotency with response
+async function completeIdempotency(
+  idempotencyKey: string,
+  response: MutationResult,
+): Promise<void> {
+  const redisKey = `idempotency:${idempotencyKey}`;
+  await redis.set(
+    redisKey,
+    JSON.stringify({
+      status: "complete",
+      response,
+      completedAt: new Date().toISOString(),
+    }),
+    { ex: IDEMPOTENCY_TTL_SECONDS },
+  );
+}
+
+// Helper: Clear idempotency on failure (allow retry)
+async function clearIdempotency(idempotencyKey: string): Promise<void> {
+  const redisKey = `idempotency:${idempotencyKey}`;
+  await redis.del(redisKey);
+}
+
+// Custom Errors
+export class InsufficientFundsError extends Error {
+  constructor(
+    public readonly requestedAmount: number,
+    public readonly availableBalance: number,
+  ) {
+    super(
+      `Insufficient funds: requested ${requestedAmount} paise, available ${availableBalance} paise`,
+    );
+    this.name = "InsufficientFundsError";
+  }
+}
+
+export class IdempotencyConflictError extends Error {
+  constructor(public readonly idempotencyKey: string) {
+    super(
+      `Idempotency conflict: request with key ${idempotencyKey} is already being processed`,
+    );
+    this.name = "IdempotencyConflictError";
+  }
+}
+
+export class WalletNotFoundError extends Error {
+  constructor(
+    public readonly userId: number,
+    public readonly walletType: WalletType,
+  ) {
+    super(`Wallet not found for user ${userId} of type ${walletType}`);
+    this.name = "WalletNotFoundError";
+  }
+}
+
+export class InvalidAmountError extends Error {
+  constructor(
+    public readonly amount: number,
+    public readonly reason: string,
+  ) {
+    super(`Invalid amount ${amount}: ${reason}`);
+    this.name = "InvalidAmountError";
+  }
+}
+
+/**
+ * Core mutation function - handles both credits and debits
+ *
+ * This is the ONLY function that should modify wallet state.
+ * All other wallet operations must go through this.
+ */
+async function executeMutation(
   params: {
     userId: number;
-    adminUserId?: number;
     walletType: WalletType;
-    type: (typeof walletTransactionTypeEnum.enumValues)[number];
     amountInPaise: number;
-    note?: string;
-    sourceClickId?: string;
+    transactionType: TransactionType;
+    sourceReference: string | null;
+    sourceType: string | null;
+    idempotencyKey: string | null;
+    metadata: Record<string, unknown> | null;
+    actorId: number | null;
+    ipAddress?: string;
+    userAgent?: string;
   },
-  walletId: number,
-) => {
-  const nextBalanceSql =
-    params.type === "credit"
-      ? sql`${wallets.balanceInPaise} + ${params.amountInPaise}`
-      : sql`${wallets.balanceInPaise} - ${params.amountInPaise}`;
+  isCredit: boolean,
+): Promise<MutationResult> {
+  // Validate amount
+  if (params.amountInPaise <= 0) {
+    throw new InvalidAmountError(params.amountInPaise, "must be positive");
+  }
 
-  const debitGuardSql =
-    params.type === "debit"
-      ? sql`and ${wallets.balanceInPaise} >= ${params.amountInPaise}`
-      : sql``;
+  // Idempotency check
+  const idempotencyResult = await checkIdempotency(params.idempotencyKey);
+  if (idempotencyResult.isDuplicate && idempotencyResult.cachedResponse) {
+    return idempotencyResult.cachedResponse;
+  }
+
+  // Mark as processing
+  if (params.idempotencyKey) {
+    await markIdempotencyProcessing(params.idempotencyKey);
+  }
 
   try {
-    const updateAndInsertResult = await db.execute(sql`
-      with updated_wallet as (
-        update wallets
-        set
-          balance_in_paise = ${nextBalanceSql},
-          updated_at = now()
-        where
-          id = ${walletId}
-          and user_id = ${params.userId}
-          and wallet_type = ${params.walletType}
-          ${debitGuardSql}
-        returning id
-      ),
-      inserted_transaction as (
-        insert into wallet_transactions (
-          user_id,
-          admin_user_id,
-          wallet_type,
-          type,
-          amount_in_paise,
-          note,
-          source_click_id
-        )
-        select
-          ${params.userId},
-          ${params.adminUserId ?? null},
-          ${params.walletType},
-          ${params.type},
-          ${params.amountInPaise},
-          ${params.note ?? null},
-          ${params.sourceClickId ?? null}
-        from updated_wallet
-        returning id
-      )
-      select id from updated_wallet;
-    `);
+    const result = await db.transaction(async (tx) => {
+      // 1. Get and lock the wallet in a single query (FOR UPDATE prevents concurrent modifications)
+      const wallet = await getLockedWallet(
+        params.userId,
+        params.walletType,
+        tx,
+      );
 
-    if (!updateAndInsertResult.rows || updateAndInsertResult.rows.length === 0) {
-      throw new Error("Insufficient wallet balance.");
+      const currentBalance = wallet.balanceInPaise;
+
+      // 2. For debits, verify sufficient funds
+      if (!isCredit) {
+        if (currentBalance < params.amountInPaise) {
+          throw new InsufficientFundsError(
+            params.amountInPaise,
+            currentBalance,
+          );
+        }
+      }
+
+      // 3. Calculate new balance
+      const newBalance = isCredit
+        ? currentBalance + params.amountInPaise
+        : currentBalance - params.amountInPaise;
+
+      // 4. Get next sequence number from locked wallet state
+      const sequenceNumber = wallet.lastLedgerSequence + 1;
+
+      // 5. Create the ledger entry
+      let sourceClickId: string | null = null;
+      if (params.sourceType === "click" && params.sourceReference) {
+        sourceClickId = params.sourceReference;
+      }
+      
+      const adminUserId = params.actorId !== params.userId ? params.actorId : null;
+
+      const [insertedTx] = await tx.insert(walletTransactions).values({
+        walletId: wallet.id,
+        userId: params.userId,
+        walletType: params.walletType,
+        type: isCredit ? "credit" : "debit",
+        amountInPaise: params.amountInPaise,
+        balanceAfterInPaise: newBalance,
+        sequenceNumber,
+        note: params.sourceReference,
+        sourceClickId,
+        adminUserId,
+      }).returning({ id: walletTransactions.id });
+
+      const transactionId = insertedTx.id;
+
+      const ledgerEntry: LedgerEntry = {
+        id: transactionId,
+        walletId: wallet.id,
+        userId: params.userId,
+        transactionType: params.transactionType,
+        amountInPaise: params.amountInPaise,
+        balanceAfterInPaise: newBalance,
+        sequenceNumber,
+        sourceReference: params.sourceReference,
+        sourceType: params.sourceType,
+        idempotencyKey: params.idempotencyKey,
+        metadata: params.metadata,
+        ipAddress: params.ipAddress ?? null,
+        userAgent: params.userAgent ?? null,
+      };
+
+      // 6. Update the wallet cache
+      await tx
+        .update(wallets)
+        .set({
+          balanceInPaise: newBalance,
+          lastLedgerSequence: sequenceNumber,
+          updatedAt: new Date(),
+        })
+        .where(eq(wallets.id, wallet.id));
+
+      // 7. Write synchronous audit log
+      await tx.insert(auditLogs).values({
+        actorId: params.actorId ?? params.userId,
+        actionType: `WALLET_${params.transactionType}`,
+        entityType: "wallet_transactions",
+        entityId: transactionId.toString(),
+        metadata: {
+          walletId: wallet.id,
+          walletType: params.walletType,
+          amountInPaise: params.amountInPaise,
+          previousBalance: currentBalance,
+          newBalance,
+          sequenceNumber,
+          sourceReference: params.sourceReference,
+          sourceType: params.sourceType,
+          idempotencyKey: params.idempotencyKey,
+          ipAddress: params.ipAddress,
+          userAgent: params.userAgent,
+        },
+      });
+
+      return {
+        success: true,
+        transaction: ledgerEntry,
+        previousBalance: currentBalance,
+        newBalance,
+      };
+    });
+
+    // Complete idempotency
+    if (params.idempotencyKey) {
+      await completeIdempotency(params.idempotencyKey, result);
     }
+
+    return result;
   } catch (error) {
-    if (params.sourceClickId && isUniqueConstraintError(error)) {
-      throw new Error("Reward already processed for this click.");
+    // Clear idempotency on failure to allow retry
+    if (params.idempotencyKey) {
+      await clearIdempotency(params.idempotencyKey);
     }
     throw error;
   }
+}
 
-  const [updatedWallet] = await db
-    .select()
-    .from(wallets)
-    .where(
-      and(
-        eq(wallets.id, walletId),
-        eq(wallets.userId, params.userId),
-        eq(wallets.walletType, params.walletType),
-      ),
-    )
-    .limit(1);
+/**
+ * Credit funds to a wallet
+ */
+export async function creditWallet(
+  params: z.infer<typeof CreditRequestSchema> & {
+    ipAddress?: string;
+    userAgent?: string;
+  },
+): Promise<MutationResult> {
+  const validated = CreditRequestSchema.parse(params);
+  return executeMutation(
+    {
+      ...validated,
+      sourceReference: validated.sourceReference ?? null,
+      sourceType: validated.sourceType ?? null,
+      idempotencyKey: validated.idempotencyKey ?? null,
+      metadata: validated.metadata ?? null,
+      actorId: validated.actorId ?? null,
+      ipAddress: params.ipAddress,
+      userAgent: params.userAgent,
+    },
+    true,
+  );
+}
 
-  if (!updatedWallet) {
-    throw new Error("Wallet update committed but refresh failed.");
+/**
+ * Debit funds from a wallet
+ */
+export async function debitWallet(
+  params: z.infer<typeof DebitRequestSchema> & {
+    ipAddress?: string;
+    userAgent?: string;
+  },
+): Promise<MutationResult> {
+  const validated = DebitRequestSchema.parse(params);
+
+  // Additional validation for debits
+  if (validated.transactionType === "WITHDRAWAL") {
+    if (validated.amountInPaise < MINIMUM_WITHDRAWAL_PAISE) {
+      throw new InvalidAmountError(
+        validated.amountInPaise,
+        `minimum withdrawal is ${MINIMUM_WITHDRAWAL_PAISE} paise (₹${MINIMUM_WITHDRAWAL_PAISE / 100})`,
+      );
+    }
+    if (validated.amountInPaise > MAXIMUM_WITHDRAWAL_PAISE) {
+      throw new InvalidAmountError(
+        validated.amountInPaise,
+        `maximum withdrawal is ${MAXIMUM_WITHDRAWAL_PAISE} paise (₹${MAXIMUM_WITHDRAWAL_PAISE / 100})`,
+      );
+    }
   }
 
-  return updatedWallet;
-};
+  return executeMutation(
+    {
+      ...validated,
+      sourceReference: validated.sourceReference ?? null,
+      sourceType: validated.sourceType ?? null,
+      idempotencyKey: validated.idempotencyKey ?? null,
+      metadata: validated.metadata ?? null,
+      actorId: validated.actorId ?? null,
+      ipAddress: params.ipAddress,
+      userAgent: params.userAgent,
+    },
+    false,
+  );
+}
 
-export type WalletType = (typeof walletTypeEnum.enumValues)[number];
-export type WalletDbClient = Pick<
-  typeof db,
-  "select" | "insert" | "update" | "delete" | "execute"
->;
-
-export const DEFAULT_WALLET_TYPE: WalletType = "cashback";
-export const AMAZON_REWARDS_WALLET_TYPE: WalletType = "amazon_rewards";
-
-export const ensureWalletForUser = async (
+/**
+ * Get wallet balance (read-only)
+ */
+export async function getWalletBalance(
   userId: number,
-  walletType: WalletType = DEFAULT_WALLET_TYPE,
-  dbClient: WalletDbClient = db,
-) => {
-  const [wallet] = await dbClient
-    .select()
+  walletType: WalletType,
+): Promise<{ balanceInPaise: number; walletId: number }> {
+  const result = await db
+    .select({
+      id: wallets.id,
+      balanceInPaise: wallets.balanceInPaise,
+    })
     .from(wallets)
     .where(and(eq(wallets.userId, userId), eq(wallets.walletType, walletType)))
     .limit(1);
 
-  if (wallet) {
-    return wallet;
+  if (result.length === 0) {
+    return { balanceInPaise: 0, walletId: 0 };
   }
 
-  await dbClient
-    .insert(wallets)
-    .values({ userId, walletType, balanceInPaise: 0 })
-    .onConflictDoNothing({ target: [wallets.userId, wallets.walletType] });
+  return {
+    balanceInPaise: result[0].balanceInPaise,
+    walletId: result[0].id,
+  };
+}
 
-  const [ensuredWallet] = await dbClient
-    .select()
+/**
+ * Get transaction history for a wallet
+ */
+export async function getTransactionHistory(
+  userId: number,
+  walletType: WalletType,
+  options?: {
+    limit?: number;
+    offset?: number;
+    beforeSequence?: number;
+  },
+): Promise<{
+  transactions: LedgerEntry[];
+  hasMore: boolean;
+  total: number;
+}> {
+  const limit = options?.limit ?? 20;
+  const offset = options?.offset ?? 0;
+
+  // Get wallet ID first
+  const walletResult = await db
+    .select({ id: wallets.id })
     .from(wallets)
     .where(and(eq(wallets.userId, userId), eq(wallets.walletType, walletType)))
     .limit(1);
 
-  if (!ensuredWallet) {
-    throw new Error("Failed to create wallet.");
+  if (walletResult.length === 0) {
+    return { transactions: [], hasMore: false, total: 0 };
   }
 
-  return ensuredWallet;
-};
+  const walletId = walletResult[0].id;
 
-export const ensureWalletsForUser = async (userId: number, dbClient: WalletDbClient = db) => {
+  // Build query conditions
+  const conditions: any[] = [eq(walletTransactions.walletId, walletId)];
+  if (options?.beforeSequence) {
+    conditions.push(
+      sql`${walletTransactions.sequenceNumber} < ${options.beforeSequence}`,
+    );
+  }
+
+  // Get transactions (newest first)
+  const transactions = await db
+    .select()
+    .from(walletTransactions)
+    .where(and(...conditions))
+    .orderBy(desc(walletTransactions.sequenceNumber))
+    .limit(limit + 1) // Fetch one extra to check hasMore
+    .offset(offset);
+
+  const hasMore = transactions.length > limit;
+  const returnedTransactions = transactions.slice(0, limit);
+
+  // Get total count
+  const countResult = await db
+    .select({ count: sql<number>`COUNT(*)` })
+    .from(walletTransactions)
+    .where(eq(walletTransactions.walletId, walletId));
+
+  const mappedTransactions: LedgerEntry[] = returnedTransactions.map((t) => ({
+    id: t.id,
+    walletId: t.walletId!,
+    userId: t.userId,
+    transactionType: "MANUAL_CREDIT", // We don't have the original transactionType in the DB, only credit/debit
+    amountInPaise: t.amountInPaise,
+    balanceAfterInPaise: t.balanceAfterInPaise!,
+    sequenceNumber: t.sequenceNumber!,
+    sourceReference: t.note,
+    sourceType: t.sourceClickId ? "click" : null,
+    idempotencyKey: null,
+    metadata: null,
+    ipAddress: null,
+    userAgent: null,
+  }));
+
+  return {
+    transactions: mappedTransactions,
+    hasMore,
+    total: Number(countResult[0].count),
+  };
+}
+
+// Re-export types
+export type { LedgerEntry, MutationResult };
+
+/**
+ * Ensure a wallet exists for a user for a given type.
+ * Creates it if it doesn't exist.
+ */
+export async function ensureWalletForUser(
+  userId: number,
+  walletType: WalletType,
+): Promise<{ id: number; balanceInPaise: number }> {
+  const [existing] = await db
+    .select({ id: wallets.id, balanceInPaise: wallets.balanceInPaise })
+    .from(wallets)
+    .where(and(eq(wallets.userId, userId), eq(wallets.walletType, walletType)))
+    .limit(1);
+
+  if (existing) {
+    return existing;
+  }
+
+  await db.insert(wallets).values({
+    userId,
+    walletType,
+    balanceInPaise: 0,
+    lastLedgerSequence: 0,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  }).onConflictDoNothing();
+
+  const [wallet] = await db
+    .select({ id: wallets.id, balanceInPaise: wallets.balanceInPaise })
+    .from(wallets)
+    .where(and(eq(wallets.userId, userId), eq(wallets.walletType, walletType)))
+    .limit(1);
+
+  return wallet;
+}
+
+export const ensureWalletsForUser = async (userId: number) => {
   const [cashbackWallet, amazonRewardsWallet] = await Promise.all([
-    ensureWalletForUser(userId, DEFAULT_WALLET_TYPE, dbClient),
-    ensureWalletForUser(userId, AMAZON_REWARDS_WALLET_TYPE, dbClient),
+    ensureWalletForUser(userId, DEFAULT_WALLET_TYPE),
+    ensureWalletForUser(userId, AMAZON_REWARDS_WALLET_TYPE),
   ]);
 
   return { cashbackWallet, amazonRewardsWallet };
 };
 
-export const getWalletBalance = async (
-  userId: number,
-  walletType: WalletType = DEFAULT_WALLET_TYPE,
-  dbClient: WalletDbClient = db,
-) => {
-  const wallet = await ensureWalletForUser(userId, walletType, dbClient);
-  return wallet.balanceInPaise;
-};
-
-const applyWalletAdjustment = async (
-  dbClient: WalletDbClient,
+/**
+ * Adjusts a wallet balance by crediting or debiting funds.
+ * This is a high-level wrapper around `creditWallet` and `debitWallet`.
+ */
+export async function adjustWalletBalance(
   params: {
     userId: number;
     adminUserId?: number;
     walletType: WalletType;
-    type: (typeof walletTransactionTypeEnum.enumValues)[number];
+    type: "credit" | "debit";
     amountInPaise: number;
     note?: string;
     sourceClickId?: string;
   },
-  walletId: number,
-) => {
-  const nextBalanceSql =
-    params.type === "credit"
-      ? sql`${wallets.balanceInPaise} + ${params.amountInPaise}`
-      : sql`${wallets.balanceInPaise} - ${params.amountInPaise}`;
-
-  const balanceGuard =
-    params.type === "debit"
-      ? gte(wallets.balanceInPaise, params.amountInPaise)
-      : undefined;
-
-  const [updatedWallet] = await dbClient
-    .update(wallets)
-    .set({
-      balanceInPaise: nextBalanceSql,
-      updatedAt: new Date(),
-    })
-    .where(
-      balanceGuard
-        ? and(
-            eq(wallets.id, walletId),
-            eq(wallets.userId, params.userId),
-            eq(wallets.walletType, params.walletType),
-            balanceGuard,
-          )
-        : and(
-            eq(wallets.id, walletId),
-            eq(wallets.userId, params.userId),
-            eq(wallets.walletType, params.walletType),
-          ),
-    )
-    .returning();
-
-  if (!updatedWallet) {
-    throw new Error("Insufficient wallet balance.");
-  }
-
-  try {
-    await dbClient.insert(walletTransactions).values({
-      userId: params.userId,
-      adminUserId: params.adminUserId,
-      walletType: params.walletType,
-      type: params.type,
-      amountInPaise: params.amountInPaise,
-      note: params.note,
-      sourceClickId: params.sourceClickId,
-    });
-  } catch (error) {
-    if (params.sourceClickId && isUniqueConstraintError(error)) {
-      throw new Error("Reward already processed for this click.");
-    }
-    throw error;
-  }
-
-  return updatedWallet;
-};
-
-export const adjustWalletBalance = async (
-  params: {
-    userId: number;
-    adminUserId?: number;
-    walletType?: WalletType;
-    type: (typeof walletTransactionTypeEnum.enumValues)[number];
-    amountInPaise: number;
-    note?: string;
-    sourceClickId?: string;
-  },
-  dbClient: WalletDbClient = db,
-) => {
-  const amountInPaise = clampToPaise(params.amountInPaise);
-  if (amountInPaise <= 0) {
-    throw new Error("Amount must be greater than zero.");
-  }
-
-  const walletType = params.walletType ?? DEFAULT_WALLET_TYPE;
-  const wallet = await ensureWalletForUser(params.userId, walletType, dbClient);
-
-  const normalizedParams = {
-    ...params,
-    walletType,
-    amountInPaise,
+  tx?: any,
+): Promise<MutationResult> {
+  const commonParams = {
+    userId: params.userId,
+    walletType: params.walletType,
+    amountInPaise: params.amountInPaise,
+    sourceReference: params.note || null,
+    sourceType: params.sourceClickId ? "click" : "manual",
+    actorId: params.adminUserId || params.userId,
   };
 
-  if (dbClient !== db) {
-    return applyWalletAdjustment(dbClient, normalizedParams, wallet.id);
-  }
-
-  try {
-    return await db.transaction(async (tx) => {
-      return applyWalletAdjustment(tx, normalizedParams, wallet.id);
-    });
-  } catch (error) {
-    if (!isTransactionTransportError(error)) {
-      throw error;
-    }
-
-    return adjustWalletBalanceWithAtomicCte(
-      normalizedParams,
-      wallet.id,
+  if (params.type === "credit") {
+    return creditWallet(
+      {
+        ...commonParams,
+        transactionType: "MANUAL_CREDIT",
+      },
+    );
+  } else {
+    return debitWallet(
+      {
+        ...commonParams,
+        transactionType: "MANUAL_DEBIT",
+      },
     );
   }
-};
+}

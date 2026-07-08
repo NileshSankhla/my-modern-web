@@ -7,16 +7,17 @@ import NotificationBellClient from "./notification-bell-client";
 import NavbarWalletClient from "./navbar-wallet-client";
 import ThemeSwitcher from "./theme-switcher";
 import { Button } from "./ui/button";
-import DashboardToggleButton from "./dashboard-toggle-button";
+import { DashboardToggleButton } from "./action-buttons";
 
 const Navbar = async () => {
   const user = await getCurrentUser();
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 shadow-sm backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
+    <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 elev-1 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
       <div className="absolute top-0 left-0 h-[1px] w-full bg-gradient-to-r from-transparent via-primary/20 to-transparent" />
 
-      <div className="container relative z-10 mx-auto flex h-16 items-center justify-between px-4">
+      <div className="container relative z-10 mx-auto flex h-14 items-center justify-between px-4 md:h-16">
+        {/* Logo */}
         <Link
           href="/"
           className="flex items-center transition-transform hover:scale-105"
@@ -25,21 +26,22 @@ const Navbar = async () => {
           <Image
             src="/brand-name-dark.svg"
             alt="Fareback"
-            width={164}
-            height={64}
-            className="h-9 w-auto dark:hidden"
+            width={140}
+            height={56}
+            className="h-8 w-auto dark:hidden md:h-9"
             priority
           />
           <Image
             src="/brand-name-light.svg"
             alt="Fareback"
-            width={164}
-            height={64}
-            className="hidden h-9 w-auto dark:block"
+            width={140}
+            height={56}
+            className="hidden h-8 w-auto dark:block md:h-9"
             priority
           />
         </Link>
 
+        {/* Desktop nav links */}
         <nav className="hidden items-center gap-8 text-sm font-medium md:flex">
           {[
             { name: "Offers", href: "/#offers" },
@@ -57,26 +59,41 @@ const Navbar = async () => {
           ))}
         </nav>
 
-        <div className="flex items-center gap-3">
+        {/* Right side actions */}
+        <div className="flex items-center gap-2 md:gap-3">
           <ThemeSwitcher />
           {user ? (
-            <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex items-center gap-1.5 md:gap-2">
+              {/* Wallet: desktop only (mobile has bottom nav) */}
               <NavbarWalletClient />
+              {/* Notification bell */}
               <NotificationBellClient />
+              {/* Dashboard toggle: desktop only */}
               <DashboardToggleButton />
 
               {user.isAdmin ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="hidden border-primary/30 hover:bg-primary/10 sm:flex"
-                  asChild
-                >
-                  <Link href="/admin">Admin</Link>
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="hidden border-primary/30 hover:bg-primary/10 sm:flex"
+                    asChild
+                  >
+                    <Link href="/admin">Admin</Link>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="hidden border-emerald-500/30 text-emerald-600 hover:bg-emerald-500/10 sm:flex dark:text-emerald-400"
+                    asChild
+                  >
+                    <Link href="/finance">Finance</Link>
+                  </Button>
+                </>
               ) : null}
 
-              <form action={signOutAction}>
+              {/* Sign out: desktop only — mobile users sign out from Profile page */}
+              <form action={signOutAction} className="hidden md:block">
                 <Button
                   size="icon"
                   type="submit"
@@ -92,10 +109,10 @@ const Navbar = async () => {
           ) : (
             <Button
               size="sm"
-              className="rounded-full px-6 shadow-[0_0_15px_hsl(var(--primary)/0.2)] transition-all hover:scale-105 hover:shadow-[0_0_20px_hsl(var(--primary)/0.4)]"
+              className="rounded-full px-5 shadow-[0_0_15px_hsl(var(--primary)/0.2)] transition-all hover:scale-105 hover:shadow-[0_0_20px_hsl(var(--primary)/0.4)]"
               asChild
             >
-                <Link href="/sign-in">Get Started</Link>
+              <Link href="/sign-in">Get Started</Link>
             </Button>
           )}
         </div>

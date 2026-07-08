@@ -6,16 +6,24 @@ import { resolve } from "path";
 const databaseUrl = process.env.DATABASE_URL;
 
 if (!databaseUrl) {
-  console.error("DATABASE_URL is required. Set it in your environment before running db:seed.");
+  console.error(
+    "DATABASE_URL is required. Set it in your environment before running db:seed.",
+  );
   process.exit(1);
 }
 
 const sql = neon(databaseUrl);
 
-const REDIS_LINKS_KEY = process.env.AFFILIATE_REDIS_LIST_KEY || "affiliate:amazon:links";
+const REDIS_LINKS_KEY =
+  process.env.AFFILIATE_REDIS_LIST_KEY || "affiliate:amazon:links";
 const REDIS_COUNTER_KEY = "affiliate:amazon:counter";
+const VALID_AMAZON_TAG_PATTERN =
+  /^(fareback0c-21|fareback00[1-9]-21|fareback0[1-4][0-9]-21|fareback050-21)$/i;
+const AMAZON_HOST_SUFFIXES = ["amazon.in", "amazon.com"];
 const overwriteMerchantFields =
-  String(process.env.SEED_OVERWRITE_MERCHANT_FIELDS || "false").toLowerCase() === "true";
+  String(
+    process.env.SEED_OVERWRITE_MERCHANT_FIELDS || "false",
+  ).toLowerCase() === "true";
 
 const requestedMerchantNames = (process.env.MERCHANT_NAMES ?? "")
   .split(",")
@@ -25,41 +33,68 @@ const requestedMerchantNames = (process.env.MERCHANT_NAMES ?? "")
 const merchantsToSeed = [
   {
     name: "Amazon",
-    baseUrl:
-      "https://www.amazon.in/?tag=fareback0c-21",
+    baseUrl: "https://www.amazon.in/?tag=fareback0c-21",
     cashbackRate: "4%",
-    logoUrl: "https://www.google.com/s2/favicons?domain=amazon.in&sz=64",
+    logoUrl: "/merchants/amazon.svg",
   },
   {
     name: "Flipkart",
     baseUrl: "https://www.flipkart.com/",
     cashbackRate: "x%",
-    logoUrl: "https://www.google.com/s2/favicons?domain=flipkart.com&sz=64",
+    logoUrl: "/merchants/flipkart.svg",
   },
   {
     name: "Myntra",
     baseUrl: "https://www.myntra.com/",
     cashbackRate: "x%",
-    logoUrl: "https://www.google.com/s2/favicons?domain=myntra.com&sz=64",
+    logoUrl: "/merchants/myntra.svg",
   },
   {
     name: "AJIO",
     baseUrl: "https://www.ajio.com/",
     cashbackRate: "x%",
-    logoUrl: "https://www.google.com/s2/favicons?domain=ajio.com&sz=64",
+    logoUrl: "/merchants/ajio.svg",
   },
 ];
 
 const normalizeName = (name) => name.trim().toLowerCase();
 const requestedNameSet = new Set(requestedMerchantNames.map(normalizeName));
 
+const normalizeAmazonAffiliateUrl = (value) => {
+  try {
+    const parsed = new URL(value);
+    const isAmazonHost = AMAZON_HOST_SUFFIXES.some(
+      (suffix) =>
+        parsed.hostname === suffix || parsed.hostname.endsWith(`.${suffix}`),
+    );
+    const tag = parsed.searchParams.get("tag");
+
+    if (
+      parsed.protocol === "https:" &&
+      isAmazonHost &&
+      tag &&
+      VALID_AMAZON_TAG_PATTERN.test(tag)
+    ) {
+      return parsed.toString();
+    }
+  } catch {
+    // Ignore malformed lines.
+  }
+
+  return null;
+};
+
 const filteredMerchants =
   requestedMerchantNames.length === 0
     ? merchantsToSeed
-    : merchantsToSeed.filter((merchant) => requestedNameSet.has(normalizeName(merchant.name)));
+    : merchantsToSeed.filter((merchant) =>
+        requestedNameSet.has(normalizeName(merchant.name)),
+      );
 
 if (requestedMerchantNames.length > 0) {
-  const configuredNames = new Set(merchantsToSeed.map((m) => normalizeName(m.name)));
+  const configuredNames = new Set(
+    merchantsToSeed.map((m) => normalizeName(m.name)),
+  );
   const unknownNames = requestedMerchantNames.filter(
     (name) => !configuredNames.has(normalizeName(name)),
   );
@@ -75,8 +110,8 @@ if (requestedMerchantNames.length > 0) {
 }
 
 const parseAffiliateCsv = () => {
-  const csvPath = resolve(process.cwd(), "amazonlinks.csv");
-  const content = readFileSync(csvPath, "utf8");
+  const AMAZON_LINKS_FILE = resolve(__dirname, "amazonlinks.csv");
+  const content = readFileSync(AMAZON_LINKS_FILE, "utf8");
 
   const links = [];
   for (const rawLine of content.split(/\r?\n/)) {
@@ -91,10 +126,9 @@ const parseAffiliateCsv = () => {
     }
 
     try {
-      const parsed = new URL(value);
-      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
-        // Keep URL exactly as provided to avoid affiliate-link mutation.
-        links.push(value);
+      const normalized = normalizeAmazonAffiliateUrl(value);
+      if (normalized) {
+        links.push(normalized);
       }
     } catch {
       // Ignore malformed lines.
@@ -108,7 +142,9 @@ const syncAffiliateLinksToRedis = async (links) => {
   const url = process.env.UPSTASH_REDIS_REST_URL;
   const token = process.env.UPSTASH_REDIS_REST_TOKEN;
   if (!url || !token) {
-    console.log("Upstash Redis env missing; skipped Redis affiliate link sync.");
+    console.log(
+      "Upstash Redis env missing; skipped Redis affiliate link sync.",
+    );
     return;
   }
 
@@ -119,7 +155,9 @@ const syncAffiliateLinksToRedis = async (links) => {
       await redis.rpush(REDIS_LINKS_KEY, ...links);
     }
     await redis.set(REDIS_COUNTER_KEY, 0);
-    console.log(`Redis affiliate list synced. Key=${REDIS_LINKS_KEY}, links=${links.length}`);
+    console.log(
+      `Redis affiliate list synced. Key=${REDIS_LINKS_KEY}, links=${links.length}`,
+    );
 
     const stickyKeys = await redis.keys("affiliate:redirect:recent:*");
     if (stickyKeys.length > 0) {
@@ -127,7 +165,10 @@ const syncAffiliateLinksToRedis = async (links) => {
       console.log(`Cleared ${stickyKeys.length} sticky affiliate sessions.`);
     }
   } catch (error) {
-    console.warn("Redis affiliate sync failed; kept SQL affiliate data as source of truth:", error);
+    console.warn(
+      "Redis affiliate sync failed; kept SQL affiliate data as source of truth:",
+      error,
+    );
   }
 };
 
