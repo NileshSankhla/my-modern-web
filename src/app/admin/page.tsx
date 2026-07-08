@@ -1,10 +1,10 @@
 import { requireAdminUser } from "@/lib/admin";
 import { AdminPanel } from "@/components/fareback-admin/admin-panel";
 import { db } from "@/lib/db";
-import { users, affiliateLinks as affiliateLinksTable, auditLogs, merchants, sessions, notifications } from "@/lib/db/schema";
+import { users, affiliateLinks as affiliateLinksTable, auditLogs, merchants, sessions, notifications, clicks } from "@/lib/db/schema";
 import { sql, desc, eq, and, count, gt, gte } from "drizzle-orm";
 
-import { AdminRole, Kpi, AdminUser, AffiliateLink, NotificationRecord, AuditEntry, ActivityItem } from "@/components/fareback-admin/data";
+import { AdminRole, Kpi, AdminUser, AffiliateLink, AllPlatformUser, NotificationRecord, AuditEntry, ActivityItem } from "@/components/fareback-admin/data";
 
 export default async function AdminDashboardPage() {
   const currentUser = await requireAdminUser();
@@ -28,27 +28,63 @@ export default async function AdminDashboardPage() {
     { id: "audit", label: "Audit events (30d)", value: recentAudits[0]?.count || 0, deltaPct: 0, spark: [0, 0, 0, 0, 0, 0, 0], icon: "history" },
   ];
 
-  // 2. Fetch Admin Users
+  // 2. Fetch Admin Users (elevated roles only — shown in the right-panel list)
   const adminsFromDb = await db.select().from(users).where(sql`${users.isAdmin} = true OR ${users.isFinanceManager} = true`).orderBy(users.name);
   const adminUsers: AdminUser[] = adminsFromDb.map(u => ({
     id: `U-${u.id}`,
-    name: u.name || "Unknown",
+    numericId: u.id,
+    name: u.name || u.email.split("@")[0],
     email: u.email,
     role: (u.isAdmin ? "admin" : "finance_manager") as AdminRole,
+    isAdmin: u.isAdmin ?? false,
+    isFinanceManager: u.isFinanceManager ?? false,
     lastActive: u.updatedAt.toISOString(),
     joinedAt: u.createdAt.toISOString(),
-    avatarColor: "#0ea5e9", // Mock color
+    avatarColor: "#0ea5e9",
   }));
 
-  // 3. Fetch Affiliate Links
-  const linksFromDb = await db.select().from(affiliateLinksTable).orderBy(affiliateLinksTable.linkNumber);
+  // 2b. Fetch ALL platform users for the searchable user picker in access control
+  const allUsersFromDb = await db
+    .select({ id: users.id, name: users.name, email: users.email, isAdmin: users.isAdmin, isFinanceManager: users.isFinanceManager, createdAt: users.createdAt })
+    .from(users)
+    .orderBy(users.name);
+  const allPlatformUsers: AllPlatformUser[] = allUsersFromDb.map(u => ({
+    numericId: u.id,
+    name: u.name || u.email.split("@")[0],
+    email: u.email,
+    isAdmin: u.isAdmin ?? false,
+    isFinanceManager: u.isFinanceManager ?? false,
+    createdAt: u.createdAt.toISOString(),
+  }));
+
+  // 3. Fetch Affiliate Links with REAL per-link click counts
+  const [linksFromDb, amazonMerchant] = await Promise.all([
+    db.select().from(affiliateLinksTable).orderBy(affiliateLinksTable.linkNumber),
+    db.select({ id: merchants.id }).from(merchants).where(sql`lower(${merchants.name}) = 'amazon'`).limit(1).then(rows => rows[0] ?? null),
+  ]);
+
+  // Get click counts grouped by affiliateLinkIndex (index = linkNumber - 1)
+  const clickCountsByIndex: Record<number, number> = {};
+  if (amazonMerchant) {
+    const clickGroups = await db
+      .select({ affiliateLinkIndex: clicks.affiliateLinkIndex, cnt: count() })
+      .from(clicks)
+      .where(and(eq(clicks.merchantId, amazonMerchant.id), sql`${clicks.affiliateLinkIndex} is not null`))
+      .groupBy(clicks.affiliateLinkIndex);
+    for (const row of clickGroups) {
+      if (row.affiliateLinkIndex !== null) {
+        clickCountsByIndex[row.affiliateLinkIndex] = Number(row.cnt);
+      }
+    }
+  }
+
   const affiliateLinks: AffiliateLink[] = linksFromDb.map(l => ({
     id: l.id,
     linkNumber: l.linkNumber,
     url: l.url,
     tag: l.url.includes("tag=") ? l.url.split("tag=")[1].split("&")[0] : "unknown",
     isActive: l.isActive,
-    clicks: 0, // Would need to query clicks table grouping by index
+    clicks: clickCountsByIndex[l.linkNumber - 1] ?? 0, // index = linkNumber - 1
     addedAt: l.createdAt.toISOString(),
   }));
 
@@ -96,6 +132,7 @@ export default async function AdminDashboardPage() {
     <AdminPanel 
       kpis={kpis}
       adminUsers={adminUsers}
+      allPlatformUsers={allPlatformUsers}
       affiliateLinks={affiliateLinks}
       notificationLog={notificationLog}
       auditLog={auditLog}

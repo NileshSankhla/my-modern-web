@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { flushRedisAction, reloadRedisLinksAction, getRedisStatsAction } from "@/app/actions/affiliate-links";
+import { flushAffiliateRedisKeysAction, reloadRedisLinksAction, getRedisStatsAction } from "@/app/actions/affiliate-links";
 import {
   Upload,
   FileSpreadsheet,
@@ -27,7 +27,7 @@ export function DataToolsTab() {
   const [relodingLinks, setReloadingLinks] = useState(false);
   const [flushing, setFlushing] = useState(false);
   const [flushOpen, setFlushOpen] = useState(false);
-  const [redisStats, setRedisStats] = useState({ connected: false, keys: 0, hitRate: 0, loading: true });
+  const [redisStats, setRedisStats] = useState({ connected: false, totalKeys: 0, affiliateLinkCount: 0, counterValue: null as number | null, loading: true });
 
   const fetchStats = async () => {
     const stats = await getRedisStatsAction();
@@ -71,16 +71,15 @@ export function DataToolsTab() {
   const handleFlush = async () => {
     setFlushOpen(false);
     setFlushing(true);
-    const res = await flushRedisAction();
+    const res = await flushAffiliateRedisKeysAction();
     setFlushing(false);
     
     if (res.error) {
       toast({ title: "Error", description: res.error, variant: "destructive" });
     } else {
       toast({
-        title: "Redis cache flushed",
-        description: res.success || "All keys, locks, and rate limits cleared.",
-        variant: "destructive",
+        title: "Affiliate cache cleared",
+        description: res.success || "Affiliate rotation keys cleared. Sessions and idempotency keys preserved.",
       });
       fetchStats();
     }
@@ -156,7 +155,7 @@ export function DataToolsTab() {
                   {redisStats.loading ? "Checking Redis..." : redisStats.connected ? "Redis connected" : "Redis disconnected"}
                 </p>
                 <p className={cn("text-[11px]", redisStats.connected ? "text-emerald-700" : "text-amber-700")}>
-                  {redisStats.loading ? "Loading stats..." : redisStats.connected ? `Cache hits: ${redisStats.hitRate}% · ${redisStats.keys} keys in rotation pool` : "Application is falling back to PostgreSQL database."}
+                  {redisStats.loading ? "Loading stats..." : redisStats.connected ? `${redisStats.affiliateLinkCount} link(s) in rotation · counter: ${redisStats.counterValue ?? 0} · ${redisStats.totalKeys} total keys` : "Application is falling back to PostgreSQL database."}
                 </p>
               </div>
             </div>
@@ -189,24 +188,25 @@ export function DataToolsTab() {
               </Button>
             </div>
 
-            {/* Danger action */}
-            <div className="flex items-center justify-between gap-3 rounded-lg border border-rose-200 bg-rose-50/50 p-3">
+            {/* Danger action — SAFE: only flushes affiliate rotation keys */}
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3">
               <div>
-                <p className="flex items-center gap-1.5 text-sm font-semibold text-rose-900">
-                  <AlertTriangle className="h-3.5 w-3.5 text-rose-500" /> Flush entire cache
+                <p className="flex items-center gap-1.5 text-sm font-semibold text-amber-900">
+                  <AlertTriangle className="h-3.5 w-3.5 text-amber-500" /> Clear affiliate cache
                 </p>
-                <p className="text-[11px] text-rose-700">
-                  Removes all locks, rate limits, and cached links. Cannot be undone.
+                <p className="text-[11px] text-amber-700">
+                  Only clears affiliate rotation keys. Sessions, idempotency, and rate limits are preserved.
                 </p>
               </div>
               <Button
-                variant="destructive"
+                variant="outline"
                 size="sm"
                 disabled={relodingLinks || flushing}
                 onClick={() => setFlushOpen(true)}
+                className="border-amber-300 text-amber-700 hover:bg-amber-100"
               >
                 <Trash2 className={cn("mr-1.5 h-3.5 w-3.5", flushing && "animate-pulse")} />
-                {flushing ? "Flushing…" : "Flush"}
+                {flushing ? "Clearing…" : "Clear cache"}
               </Button>
             </div>
           </div>
@@ -216,14 +216,15 @@ export function DataToolsTab() {
       <ConfirmDialog
         config={{
           open: flushOpen,
-          title: "Flush entire Redis cache?",
+          title: "Clear affiliate rotation cache?",
           description: (
             <span>
-              This removes <strong>all keys</strong> from Redis: rate limits, locks, and cached affiliate links.
-              The app will fall back to the database, but response times may increase until the cache warms up.
+              This removes only the affiliate link rotation keys from Redis.
+              <strong> Sessions, idempotency keys, and rate limits are NOT affected.</strong>
+              {" "}The app will briefly fall back to the database until the cache is rebuilt on the next link sync.
             </span>
           ),
-          confirmLabel: "Yes, flush everything",
+          confirmLabel: "Yes, clear affiliate cache",
           tone: "danger",
           onConfirm: handleFlush,
           onCancel: () => setFlushOpen(false),

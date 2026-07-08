@@ -158,7 +158,7 @@ async function getLockedWallet(
   };
 }
 
-// Helper: Check idempotency in Redis
+// Helper: Check idempotency in Redis (non-fatal — DB constraint is primary guard)
 async function checkIdempotency(
   idempotencyKey: string | null | undefined,
 ): Promise<IdempotencyCheckResult> {
@@ -166,68 +166,87 @@ async function checkIdempotency(
     return { isDuplicate: false };
   }
 
-  const redisKey = `idempotency:${idempotencyKey}`;
-  const cached = await redis.get(redisKey);
+  try {
+    const redisKey = `idempotency:${idempotencyKey}`;
+    const cached = await redis.get(redisKey);
 
-  if (cached) {
-    const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached as any;
-    if (parsed.status === "complete") {
-      return {
-        isDuplicate: true,
-        cachedResponse: parsed.response as MutationResult,
-      };
+    if (cached) {
+      const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached as any;
+      if (parsed.status === "complete") {
+        return {
+          isDuplicate: true,
+          cachedResponse: parsed.response as MutationResult,
+        };
+      }
+      if (parsed.status === "processing") {
+        throw new IdempotencyConflictError(idempotencyKey);
+      }
     }
-    if (parsed.status === "processing") {
-      // Still processing - this could be a duplicate request
-      // Return conflict to let client retry after a delay
-      throw new IdempotencyConflictError(idempotencyKey);
-    }
+  } catch (err) {
+    if (err instanceof IdempotencyConflictError) throw err;
+    // Redis unavailable — fall through, DB unique constraint is the safety net
+    console.warn("[wallet] Redis idempotency check failed (non-fatal):", (err as Error).message);
   }
 
   return { isDuplicate: false };
 }
 
-// Helper: Mark idempotency as processing
+// Helper: Mark idempotency as processing (non-fatal)
 async function markIdempotencyProcessing(
   idempotencyKey: string,
 ): Promise<void> {
-  const redisKey = `idempotency:${idempotencyKey}`;
-  const setResult = await redis.set(
-    redisKey,
-    JSON.stringify({
-      status: "processing",
-      startedAt: new Date().toISOString(),
-    }),
-    { nx: true, ex: IDEMPOTENCY_TTL_SECONDS },
-  );
+  try {
+    const redisKey = `idempotency:${idempotencyKey}`;
+    const setResult = await redis.set(
+      redisKey,
+      JSON.stringify({
+        status: "processing",
+        startedAt: new Date().toISOString(),
+      }),
+      { nx: true, ex: IDEMPOTENCY_TTL_SECONDS },
+    );
 
-  if (!setResult) {
-    // Key already exists - another process is handling this
-    throw new IdempotencyConflictError(idempotencyKey);
+    if (!setResult) {
+      // Key already exists — another process may be handling this
+      // But we rely on DB unique constraint as the hard guard, so only warn
+      console.warn("[wallet] Idempotency key already processing, relying on DB constraint:", idempotencyKey);
+    }
+  } catch (err) {
+    // Redis unavailable — non-fatal, DB unique constraint guards against duplicates
+    console.warn("[wallet] Redis markIdempotencyProcessing failed (non-fatal):", (err as Error).message);
   }
 }
 
-// Helper: Complete idempotency with response
+// Helper: Complete idempotency with response (non-fatal)
 async function completeIdempotency(
   idempotencyKey: string,
   response: MutationResult,
 ): Promise<void> {
-  const redisKey = `idempotency:${idempotencyKey}`;
-  await redis.set(
-    redisKey,
-    JSON.stringify({
-      status: "complete",
-      response,
-      completedAt: new Date().toISOString(),
-    }),
-    { ex: IDEMPOTENCY_TTL_SECONDS },
-  );
+  try {
+    const redisKey = `idempotency:${idempotencyKey}`;
+    await redis.set(
+      redisKey,
+      JSON.stringify({
+        status: "complete",
+        response,
+        completedAt: new Date().toISOString(),
+      }),
+      { ex: IDEMPOTENCY_TTL_SECONDS },
+    );
+  } catch (err) {
+    // Non-fatal — DB is the source of truth
+    console.warn("[wallet] Redis completeIdempotency failed (non-fatal):", (err as Error).message);
+  }
 }
 
-// Helper: Clear idempotency on failure (allow retry)
+// Helper: Clear idempotency on failure (allow retry) — non-fatal
 async function clearIdempotency(idempotencyKey: string): Promise<void> {
-  const redisKey = `idempotency:${idempotencyKey}`;
-  await redis.del(redisKey);
+  try {
+    const redisKey = `idempotency:${idempotencyKey}`;
+    await redis.del(redisKey);
+  } catch (err) {
+    console.warn("[wallet] Redis clearIdempotency failed (non-fatal):", (err as Error).message);
+  }
 }
 
 // Custom Errors

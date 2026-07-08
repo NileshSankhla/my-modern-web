@@ -82,11 +82,26 @@ export const kpis: Kpi[] = [
 
 // ---------- Users / access control -----------------------------------------
 
+/** All platform users — used for the searchable user picker in access control */
+export interface AllPlatformUser {
+  numericId: number;
+  name: string;
+  email: string;
+  isAdmin: boolean;
+  isFinanceManager: boolean;
+  createdAt: string; // ISO
+}
+
 export interface AdminUser {
+  /** String ID used in UI keys (e.g. "U-42") */
   id: string;
+  /** Numeric DB id — used to target server actions */
+  numericId: number;
   name: string;
   email: string;
   role: AdminRole;
+  isAdmin: boolean;
+  isFinanceManager: boolean;
   lastActive: string; // ISO
   joinedAt: string; // ISO
   avatarColor: string;
@@ -217,7 +232,7 @@ export const formatNumber = (n: number) =>
   new Intl.NumberFormat("en-IN").format(n);
 
 export const formatRelative = (iso: string) => {
-  const now = new Date("2026-07-04T09:30:00Z").getTime();
+  const now = Date.now();
   const then = new Date(iso).getTime();
   const diffMs = now - then;
   const diffMin = Math.floor(diffMs / 60000);

@@ -9,11 +9,12 @@ import { CommunicationsTab } from "./communications-tab";
 import { AffiliateLinksTab } from "./affiliate-links-tab";
 import { DataToolsTab } from "./data-tools-tab";
 import { AuditLogTab } from "./audit-log-tab";
-import { Kpi, AdminUser, AffiliateLink, NotificationRecord, AuditEntry, ActivityItem } from "./data";
+import { Kpi, AdminUser, AffiliateLink, AllPlatformUser, NotificationRecord, AuditEntry, ActivityItem } from "./data";
 
 export interface AdminPanelProps {
   kpis: Kpi[];
   adminUsers: AdminUser[];
+  allPlatformUsers: AllPlatformUser[];
   affiliateLinks: AffiliateLink[];
   notificationLog: NotificationRecord[];
   auditLog: AuditEntry[];
@@ -22,7 +23,7 @@ export interface AdminPanelProps {
 }
 
 export function AdminPanel({
-  kpis, adminUsers, affiliateLinks, notificationLog, auditLog, activityFeed, currentAdmin
+  kpis, adminUsers, allPlatformUsers, affiliateLinks, notificationLog, auditLog, activityFeed, currentAdmin
 }: AdminPanelProps) {
   const [active, setActive] = useState<AdminTab>("overview");
   const [collapsed, setCollapsed] = useState(false);
@@ -36,7 +37,7 @@ export function AdminPanel({
 
         <main className="mx-auto max-w-[1400px] px-4 py-6 lg:px-8 lg:py-8">
           {active === "overview" && <OverviewTab onNavigate={setActive} kpis={kpis} activityFeed={activityFeed} adminUsers={adminUsers} />}
-          {active === "access" && <AccessControlTab adminUsers={adminUsers} />}
+          {active === "access" && <AccessControlTab adminUsers={adminUsers} allPlatformUsers={allPlatformUsers} />}
           {active === "communications" && <CommunicationsTab notificationLog={notificationLog} />}
           {active === "links" && <AffiliateLinksTab affiliateLinks={affiliateLinks} />}
           {active === "data" && <DataToolsTab />}

@@ -34,12 +34,13 @@ export async function setFinanceManagerAction(
       actorId: admin.id,
       entityType: "user",
       entityId: String(user.id),
-      metadata: { role: "finance_manager", email },
+      metadata: { role: "finance_manager", email, changedBy: admin.email },
     },
   );
 
   revalidatePath("/admin");
-  return { success: `Successfully updated specialist access for ${email}` };
+  revalidatePath("/finance");
+  return { success: `${email} ${isFinanceManager ? "granted" : "revoked"} Finance Manager access.` };
 }
 
 export async function setAdminAction(email: string, isAdmin: boolean) {
@@ -47,6 +48,11 @@ export async function setAdminAction(email: string, isAdmin: boolean) {
 
   if (!email || !email.includes("@")) {
     return { error: "Invalid email" };
+  }
+
+  // Prevent self-demotion to avoid locking out all admins accidentally
+  if (!isAdmin && admin.email === email) {
+    return { error: "You cannot remove your own administrator access. Ask another admin to do this." };
   }
 
   const [user] = await db
@@ -66,12 +72,13 @@ export async function setAdminAction(email: string, isAdmin: boolean) {
       actorId: admin.id,
       entityType: "user",
       entityId: String(user.id),
-      metadata: { role: "admin", email },
+      metadata: { role: "admin", email, changedBy: admin.email },
     },
   );
 
   revalidatePath("/admin");
-  return { success: `Successfully updated admin status for ${email}` };
+  revalidatePath("/finance");
+  return { success: `${email} ${isAdmin ? "granted" : "revoked"} Administrator access.` };
 }
 
 export async function bulkApproveCSVAction(csvText: string) {

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
-  flushRedisAction,
+  flushAffiliateRedisKeysAction,
   reloadRedisLinksAction,
 } from "@/app/actions/affiliate-links";
 import {
@@ -34,7 +34,7 @@ export function RedisManagement() {
     setLoadingFlush(true);
     setMessage(null);
     try {
-      const res = await flushRedisAction();
+      const res = await flushAffiliateRedisKeysAction();
       if (res?.error) throw new Error(res.error);
       setMessage({ text: res.success || "Flushed.", type: "success" });
     } catch (err: unknown) {
