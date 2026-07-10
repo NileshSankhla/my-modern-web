@@ -20,8 +20,22 @@ const inter = Inter({
   variable: "--font-sans",
 });
 
+const getMetadataBase = () => {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.trim();
+
+  if (!appUrl) {
+    return new URL("https://fareback.in");
+  }
+
+  try {
+    return new URL(appUrl.startsWith("http") ? appUrl : `https://${appUrl}`);
+  } catch {
+    return new URL("https://fareback.in");
+  }
+};
+
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "https://fareback.in"),
+  metadataBase: getMetadataBase(),
   other: {
     "verify-admitad": "0900cdc72f",
   },
