@@ -108,13 +108,13 @@ export interface AdminUser {
 }
 
 export const adminUsers: AdminUser[] = [
-  { id: "U-1042", name: "Aarav Mehta", email: "aarav@fareback.io", role: "admin", lastActive: "2026-07-04T08:24:00Z", joinedAt: "2025-11-12T10:00:00Z", avatarColor: "#7c3aed" },
-  { id: "U-1078", name: "Priya Nair", email: "priya@fareback.io", role: "finance_manager", lastActive: "2026-07-04T07:55:00Z", joinedAt: "2025-12-03T10:00:00Z", avatarColor: "#d97706" },
-  { id: "U-1103", name: "Rohan Kapoor", email: "rohan@fareback.io", role: "admin", lastActive: "2026-07-03T22:18:00Z", joinedAt: "2026-01-08T10:00:00Z", avatarColor: "#0ea5e9" },
-  { id: "U-1156", name: "Isha Verma", email: "isha@fareback.io", role: "user", lastActive: "2026-07-04T09:12:00Z", joinedAt: "2026-02-14T10:00:00Z", avatarColor: "#8b5cf6" },
-  { id: "U-1190", name: "Karthik Rao", email: "karthik@fareback.io", role: "finance_manager", lastActive: "2026-07-04T06:40:00Z", joinedAt: "2026-03-22T10:00:00Z", avatarColor: "#ef4444" },
-  { id: "U-1224", name: "Sneha Iyer", email: "sneha@fareback.io", role: "user", lastActive: "2026-07-02T19:30:00Z", joinedAt: "2026-04-09T10:00:00Z", avatarColor: "#14b8a6" },
-  { id: "U-1258", name: "Dev Patel", email: "dev@fareback.io", role: "user", lastActive: "2026-07-04T05:15:00Z", joinedAt: "2026-05-17T10:00:00Z", avatarColor: "#f59e0b" },
+  { id: "U-1042", numericId: 1042, name: "Aarav Mehta", email: "aarav@fareback.io", role: "admin", isAdmin: true, isFinanceManager: false, lastActive: "2026-07-04T08:24:00Z", joinedAt: "2025-11-12T10:00:00Z", avatarColor: "#7c3aed" },
+  { id: "U-1078", numericId: 1078, name: "Priya Nair", email: "priya@fareback.io", role: "finance_manager", isAdmin: false, isFinanceManager: true, lastActive: "2026-07-04T07:55:00Z", joinedAt: "2025-12-03T10:00:00Z", avatarColor: "#d97706" },
+  { id: "U-1103", numericId: 1103, name: "Rohan Kapoor", email: "rohan@fareback.io", role: "admin", isAdmin: true, isFinanceManager: false, lastActive: "2026-07-03T22:18:00Z", joinedAt: "2026-01-08T10:00:00Z", avatarColor: "#0ea5e9" },
+  { id: "U-1156", numericId: 1156, name: "Isha Verma", email: "isha@fareback.io", role: "user", isAdmin: false, isFinanceManager: false, lastActive: "2026-07-04T09:12:00Z", joinedAt: "2026-02-14T10:00:00Z", avatarColor: "#8b5cf6" },
+  { id: "U-1190", numericId: 1190, name: "Karthik Rao", email: "karthik@fareback.io", role: "finance_manager", isAdmin: false, isFinanceManager: true, lastActive: "2026-07-04T06:40:00Z", joinedAt: "2026-03-22T10:00:00Z", avatarColor: "#ef4444" },
+  { id: "U-1224", numericId: 1224, name: "Sneha Iyer", email: "sneha@fareback.io", role: "user", isAdmin: false, isFinanceManager: false, lastActive: "2026-07-02T19:30:00Z", joinedAt: "2026-04-09T10:00:00Z", avatarColor: "#14b8a6" },
+  { id: "U-1258", numericId: 1258, name: "Dev Patel", email: "dev@fareback.io", role: "user", isAdmin: false, isFinanceManager: false, lastActive: "2026-07-04T05:15:00Z", joinedAt: "2026-05-17T10:00:00Z", avatarColor: "#f59e0b" },
 ];
 
 // ---------- Affiliate links -------------------------------------------------

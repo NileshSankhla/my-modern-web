@@ -13,6 +13,7 @@ import { rateLimit, buildRateLimitKey, RATE_LIMITS } from "@/lib/security/rate-l
 import { getClientIP } from "@/lib/security/fingerprint";
 import { twoFactorSetupSchema } from "@/lib/security/validation";
 import { logSecurityEvent, SECURITY_EVENTS } from "@/lib/security/audit";
+import { Redis } from "@upstash/redis";
 
 export async function POST(request: NextRequest) {
   try {
@@ -47,11 +48,19 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // The secret comes from the setup step (client holds it temporarily)
-    const { token, secret: secretBase64 } = body;
+    // The secret comes from Redis (set during the setup step)
+    const { token } = body;
+    
+    const redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL || "",
+      token: process.env.UPSTASH_REDIS_REST_TOKEN || "",
+    });
+    
+    const secretBase64 = process.env.UPSTASH_REDIS_REST_URL ? await redis.get<string>(`pending_2fa:${user.id}`) : body.secret;
+    
     if (!secretBase64) {
       return NextResponse.json(
-        { error: "Missing secret. Start setup again." },
+        { error: "Missing setup session. Start setup again." },
         { status: 400 },
       );
     }
@@ -74,6 +83,10 @@ export async function POST(request: NextRequest) {
 
     // Success — store the secret (encrypted at rest)
     await storeTOTPSecret(user.id, secret);
+    
+    if (process.env.UPSTASH_REDIS_REST_URL) {
+      await redis.del(`pending_2fa:${user.id}`);
+    }
 
     // Generate backup codes (shown ONCE to the user)
     const backupCodes = await generateBackupCodes(user.id);

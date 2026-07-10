@@ -10,6 +10,7 @@ import { getCurrentUser } from "@/lib/security/session";
 import { generateTOTPSecret, generateTOTPUri } from "@/lib/security/two-factor";
 import { rateLimit, buildRateLimitKey, RATE_LIMITS } from "@/lib/security/rate-limit";
 import { getClientIP } from "@/lib/security/fingerprint";
+import { Redis } from "@upstash/redis";
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,20 +40,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Generate secret (not saved yet — verification step saves it)
+    // Generate secret
     const { secret, base32 } = generateTOTPSecret();
     const uri = generateTOTPUri(base32, user.email);
 
-    // Store the secret temporarily in a signed cookie for the verify step.
-    // We encrypt it client-side using the session. For simplicity, we return
-    // the secret base32 and expect the client to send it back on verify.
-    // In production, store this in a `pending_2fa_setup` table with 10min TTL.
+    // Store the secret temporarily in Redis for the verify step (10 min TTL)
+    const redis = new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL || "",
+      token: process.env.UPSTASH_REDIS_REST_TOKEN || "",
+    });
+    
+    if (process.env.UPSTASH_REDIS_REST_URL) {
+      await redis.set(`pending_2fa:${user.id}`, secret.toString("base64"), { ex: 600 });
+    }
 
     return NextResponse.json({
       success: true,
       secret: base32,
       uri,
-      // QR code data URL can be generated client-side using `qrcode` lib
     });
   } catch (error) {
     console.error("[2fa-setup] Error:", error);

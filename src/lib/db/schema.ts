@@ -148,7 +148,6 @@ export const sessions = pgTable(
     userId: integer("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    token: text("token").unique(),
     tokenHash: text("token_hash").unique(),
     expiresAt: timestamp("expires_at").notNull(),
     ipAddress: varchar("ip_address", { length: 45 }),
@@ -158,9 +157,7 @@ export const sessions = pgTable(
   (table) => [
     index("sessions_user_id_idx").on(table.userId),
     index("sessions_expires_at_idx").on(table.expiresAt),
-    index("sessions_token_idx").on(table.token),
     index("sessions_token_hash_idx").on(table.tokenHash),
-    index("sessions_token_expires_at_idx").on(table.token, table.expiresAt),
   ],
 );
 
@@ -229,6 +226,7 @@ export const walletTransactions = pgTable(
     userNote: text("user_note"),
     adminUserId: integer("admin_user_id").references(() => users.id),
     sourceClickId: uuid("source_click_id").references(() => clicks.id),
+    idempotencyKey: text("idempotency_key").unique(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
@@ -266,7 +264,8 @@ export const withdrawalRequests = pgTable(
     userId: integer("user_id")
       .notNull()
       .references(() => users.id),
-    upiId: varchar("upi_id", { length: 255 }).notNull(),
+    upiIdEncrypted: text("upi_id_encrypted").notNull().default(""),
+    upiIdHash: varchar("upi_id_hash", { length: 64 }).notNull().default(""),
     amountInPaise: integer("amount_in_paise").notNull(),
     status: withdrawalStatusEnum("status").notNull().default("pending"),
     adminNote: text("admin_note"),

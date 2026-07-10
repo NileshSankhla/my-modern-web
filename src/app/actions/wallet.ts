@@ -3,8 +3,13 @@
 import { and, eq, ilike } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
+import { headers } from "next/headers";
 import { requireFinanceManager } from "@/lib/admin";
+import { rateLimit, buildRateLimitKey, RATE_LIMITS } from "@/lib/security/rate-limit";
+import { getClientIP } from "@/lib/security/fingerprint";
 import { requireUser } from "@/lib/auth";
+import { encryptField, hashForComparison } from "@/lib/security/encryption";
+import { checkWithdrawalFraud, checkGiftCardFraud } from "@/lib/security/fraud-detection";
 import { db } from "@/lib/db";
 import {
   amazonGiftCardRequests,
@@ -31,7 +36,7 @@ import {
   amazonGiftCardRequestSchema,
   walletAdjustmentSchema,
   withdrawalRequestSchema,
-} from "@/lib/validations/auth";
+} from "@/lib/security/validation";
 
 interface WalletActionState {
   error?: string;
@@ -43,7 +48,11 @@ const getString = (value: FormDataEntryValue | null) =>
   typeof value === "string" ? value : "";
 
 const parseRupeesToPaise = (value: string) => {
-  const parts = value.split(".");
+  const amountStr = value.trim();
+  if (!/^\d+(\.\d{1,2})?$/.test(amountStr)) {
+    return 0; // Return 0 so it fails the <= 0 validation naturally
+  }
+  const parts = amountStr.split(".");
   const rupees = parseInt(parts[0] || "0", 10) * 100;
   const paiseStr = (parts[1] || "00").substring(0, 2).padEnd(2, "0");
   const paise = parseInt(paiseStr, 10);
@@ -76,6 +85,18 @@ export const createWithdrawalRequestAction = async (
   try {
     const user = await requireUser();
 
+    // Rate limit
+    const reqHeaders = await headers();
+    const ip = reqHeaders.get("x-forwarded-for") ?? "127.0.0.1";
+    const rlKey = buildRateLimitKey("API_WITHDRAWAL", RATE_LIMITS.API_WITHDRAWAL, {
+      userId: user.id,
+      ip,
+    });
+    const rl = await rateLimit(rlKey, RATE_LIMITS.API_WITHDRAWAL);
+    if (!rl.success) {
+      return { error: "Too many withdrawal requests. Try again later." };
+    }
+
     const payload = {
       upiId: getString(formData.get("upiId")),
       amount: getString(formData.get("amount")),
@@ -95,13 +116,24 @@ export const createWithdrawalRequestAction = async (
       return { error: "Withdrawal amount must be greater than zero." };
     }
 
-    // Step 1: Insert pending request (unique constraint on DB enforces only one pending request per user)
+    const fraudCheck = await checkWithdrawalFraud(user.id, amountInPaise, validation.data.upiId);
+    if (!fraudCheck.allowed) {
+      return { error: "Withdrawal blocked due to unusual activity. Please contact support." };
+    }
+
+    const upiIdEncrypted = encryptField(validation.data.upiId.toLowerCase())!;
+    const upiIdHash = hashForComparison(validation.data.upiId.toLowerCase());
+
+    // Step 1: Insert pending request
     let request;
     try {
-      [request] = await db.insert(withdrawalRequests).values({
-        userId: user.id,
-        upiId: validation.data.upiId.toLowerCase(),
-        amountInPaise,
+      [request] = await db
+        .insert(withdrawalRequests)
+        .values({
+          userId: user.id,
+          upiIdEncrypted,
+          upiIdHash,
+          amountInPaise,
         status: "pending",
       }).returning();
     } catch (error) {
@@ -119,6 +151,7 @@ export const createWithdrawalRequestAction = async (
         amountInPaise,
         transactionType: "WITHDRAWAL",
         sourceReference: request.id.toString(),
+        idempotencyKey: `withdrawal_debit_${request.id}`,
       });
     } catch (err) {
       // Debit failed (e.g. insufficient funds), rollback request
@@ -143,6 +176,18 @@ export const createAmazonGiftCardRequestAction = async (
   try {
     const user = await requireUser();
 
+    // Rate limit
+    const reqHeaders = await headers();
+    const ip = reqHeaders.get("x-forwarded-for") ?? "127.0.0.1";
+    const rlKey = buildRateLimitKey("API_GIFT_CARD", RATE_LIMITS.API_GIFT_CARD, {
+      userId: user.id,
+      ip,
+    });
+    const rl = await rateLimit(rlKey, RATE_LIMITS.API_GIFT_CARD);
+    if (!rl.success) {
+      return { error: "Too many gift card requests. Try again later." };
+    }
+
     const payload = {
       amount: getString(formData.get("amount")),
     };
@@ -159,6 +204,11 @@ export const createAmazonGiftCardRequestAction = async (
 
     if (amountInPaise <= 0) {
       return { error: "Gift card conversion amount must be greater than zero." };
+    }
+
+    const fraudCheck = await checkGiftCardFraud(user.id, amountInPaise);
+    if (!fraudCheck.allowed) {
+      return { error: "Gift card conversion blocked due to unusual activity. Please contact support." };
     }
 
     // Insert pending request (unique constraint on DB enforces only one pending request per user)
@@ -184,6 +234,7 @@ export const createAmazonGiftCardRequestAction = async (
         amountInPaise,
         transactionType: "GIFT_CARD_PURCHASE",
         sourceReference: request.id.toString(),
+        idempotencyKey: `gift_card_debit_${request.id}`,
       });
     } catch (err) {
       await db.update(amazonGiftCardRequests).set({ status: "rejected", adminNote: "Insufficient funds at time of processing" }).where(eq(amazonGiftCardRequests.id, request.id));
@@ -382,11 +433,16 @@ export const adminProcessAmazonGiftCardRequestAction = async (
       return { success: `Gift card request ${validation.data.decision === "approve" ? "approved" : "rejected and refunded"}.` };
     }
 
+    if (!validation.data.giftCardCode?.trim()) {
+      return { error: "Gift card code is required to fulfill a request." };
+    }
+
     const [updated] = await db
       .update(amazonGiftCardRequests)
       .set({
         status: "fulfilled",
-        giftCardCode: validation.data.giftCardCode || null,
+        giftCardCode: null,
+        giftCardCodeEncrypted: encryptField(validation.data.giftCardCode || null),
         adminNote: validation.data.note || null,
         processedByAdminId: admin.id,
         processedAt: new Date(),
@@ -409,7 +465,7 @@ export const adminProcessAmazonGiftCardRequestAction = async (
 };
 
 export const adminProcessAmazonGiftCardRequestFormAction = async (formData: FormData) => {
-  await adminProcessAmazonGiftCardRequestAction({}, formData);
+  return await adminProcessAmazonGiftCardRequestAction({}, formData);
 };
 
 const adminProcessWithdrawalAction = async (
@@ -453,8 +509,8 @@ const adminProcessWithdrawalAction = async (
       return { error: "Only pending requests can be rejected." };
     }
 
-    if (validation.data.decision === "mark-paid" && request.status !== "approved" && request.status !== "pending") {
-      return { error: "Only pending or approved requests can be marked as paid." };
+    if (validation.data.decision === "mark-paid" && request.status !== "approved") {
+      return { error: "Only approved requests can be marked as paid." };
     }
 
     // Verify the original debit actually exists! (Prevents crash exploit)
@@ -542,7 +598,7 @@ const adminProcessWithdrawalAction = async (
 };
 
 export const adminProcessWithdrawalFormAction = async (formData: FormData) => {
-  await adminProcessWithdrawalAction({}, formData);
+  return await adminProcessWithdrawalAction({}, formData);
 };
 
 export const adminMarkClickTrackedFormAction = async (formData: FormData) => {
@@ -568,11 +624,15 @@ export const adminMarkClickTrackedFormAction = async (formData: FormData) => {
       return;
     }
 
-    // Optional: finance manager can pre-set expected reward amount (in rupees)
     const expectedRewardStr = getString(formData.get("expectedReward")).trim();
     const expectedRewardPaise = expectedRewardStr
       ? parseRupeesToPaise(expectedRewardStr)
-      : undefined;
+      : 0;
+
+    if (expectedRewardPaise <= 0) {
+      console.warn("[finance] expectedReward is required to mark as tracked");
+      return;
+    }
 
     await db
       .update(clicks)
@@ -580,9 +640,7 @@ export const adminMarkClickTrackedFormAction = async (formData: FormData) => {
         trackingStatus: "tracked",
         reviewedByAdminId: admin.id,
         reviewedAt: new Date(),
-        ...(expectedRewardPaise && expectedRewardPaise > 0
-          ? { rewardAmountInPaise: expectedRewardPaise }
-          : {}),
+        rewardAmountInPaise: expectedRewardPaise,
       })
       .where(eq(clicks.id, click.id));
 
@@ -622,6 +680,7 @@ export const adminUndoTrackedClickFormAction = async (formData: FormData) => {
       .update(clicks)
       .set({
         trackingStatus: "unreviewed",
+        rewardAmountInPaise: 0,
         reviewedByAdminId: null,
         reviewedAt: null,
       })
@@ -680,13 +739,18 @@ export const adminApproveClickFormAction = async (formData: FormData) => {
       return;
     }
 
+    if (click.userId === admin.id) {
+      console.error("[finance] adminApproveClickFormAction: self-dealing prevented for admin:", admin.id);
+      return;
+    }
+
     if (click.trackingStatus === "deleted") {
       console.error("[finance] adminApproveClickFormAction: click is deleted, cannot approve:", click.id);
       return;
     }
 
     const walletType = (validation.data.walletType as "cashback" | "amazon_rewards" | undefined)
-      ?? (clickWithMerchant?.merchantName?.trim().toLowerCase() === "amazon"
+      ?? (clickWithMerchant?.merchantName?.trim().toLowerCase().includes("amazon")
         ? AMAZON_REWARDS_WALLET_TYPE
         : DEFAULT_WALLET_TYPE);
 

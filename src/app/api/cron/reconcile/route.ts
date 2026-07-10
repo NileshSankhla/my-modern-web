@@ -17,6 +17,8 @@ import { sql, eq } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { Redis } from "@upstash/redis";
 
+import { timingSafeEqual } from 'node:crypto';
+
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_REST_URL!,
   token: process.env.UPSTASH_REDIS_REST_TOKEN!,
@@ -27,12 +29,14 @@ function verifyCronAuth(request: Request): boolean {
   const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
 
-  if (!cronSecret) {
-    console.error('CRON_SECRET not configured');
+  if (!cronSecret || !authHeader) {
+    if (!cronSecret) console.error('CRON_SECRET not configured');
     return false;
   }
 
-  return authHeader === `Bearer ${cronSecret}`;
+  const expected = `Bearer ${cronSecret}`;
+  if (authHeader.length !== expected.length) return false;
+  return timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected));
 }
 
 interface MismatchResult {
@@ -73,7 +77,7 @@ export async function GET(request: Request) {
           wt.wallet_id,
           SUM(
             CASE 
-              WHEN wt.transaction_type IN ('CASHBACK', 'BONUS', 'REFUND', 'MANUAL_CREDIT', 'REVERSAL_CREDIT') 
+              WHEN wt.type = 'credit' 
               THEN wt.amount_in_paise 
               ELSE -wt.amount_in_paise 
             END

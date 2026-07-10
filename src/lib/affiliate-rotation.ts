@@ -3,39 +3,16 @@ import { affiliateLinks, merchants } from "@/lib/db/schema";
 import { Redis } from "@upstash/redis";
 import { and, asc, eq, sql } from "drizzle-orm";
 
-export const PRIMARY_AMAZON_AFFILIATE_URL = "https://www.amazon.in/?tag=fareback0c-21";
-export const PRIMARY_AMAZON_MERCHANT_ID = Number(process.env.AMAZON_MERCHANT_ID || 1);
+import {
+  PRIMARY_AMAZON_AFFILIATE_URL,
+  PRIMARY_AMAZON_MERCHANT_ID,
+  normalizeAmazonAffiliateUrl,
+} from "./amazon-links";
+
+export { PRIMARY_AMAZON_AFFILIATE_URL, PRIMARY_AMAZON_MERCHANT_ID, normalizeAmazonAffiliateUrl };
 
 export const isPrimaryAmazonMerchantId = (merchantId: number): boolean =>
   merchantId === PRIMARY_AMAZON_MERCHANT_ID;
-
-const AMAZON_HOST_SUFFIXES = ["amazon.in", "amazon.com"];
-
-const isAmazonHost = (hostname: string): boolean =>
-  AMAZON_HOST_SUFFIXES.some(
-    (suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
-  );
-
-export const normalizeAmazonAffiliateUrl = (
-  urlString: string | null | undefined,
-): string | null => {
-  if (!urlString) {
-    return null;
-  }
-
-  try {
-    const url = new URL(urlString);
-    if (url.protocol !== "https:" || !isAmazonHost(url.hostname)) {
-      return null;
-    }
-    const tag = url.searchParams.get("tag");
-    if (!tag) return null;
-
-    return url.toString();
-  } catch {
-    return null;
-  }
-};
 
 const REDIS_COUNTER_KEY = "affiliate:amazon:counter";
 const REDIS_LINKS_KEY =

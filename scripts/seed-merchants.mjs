@@ -18,7 +18,7 @@ const REDIS_LINKS_KEY =
   process.env.AFFILIATE_REDIS_LIST_KEY || "affiliate:amazon:links";
 const REDIS_COUNTER_KEY = "affiliate:amazon:counter";
 const VALID_AMAZON_TAG_PATTERN =
-  /^(fareback0c-21|fareback00[1-9]-21|fareback0[1-4][0-9]-21|fareback050-21)$/i;
+  /^(fareback2-21)$/i;
 const AMAZON_HOST_SUFFIXES = ["amazon.in", "amazon.com"];
 const overwriteMerchantFields =
   String(
@@ -33,7 +33,7 @@ const requestedMerchantNames = (process.env.MERCHANT_NAMES ?? "")
 const merchantsToSeed = [
   {
     name: "Amazon",
-    baseUrl: "https://www.amazon.in/?tag=fareback0c-21",
+    baseUrl: "https://www.amazon.in/?tag=fareback2-21",
     cashbackRate: "4%",
     logoUrl: "/merchants/amazon.svg",
   },

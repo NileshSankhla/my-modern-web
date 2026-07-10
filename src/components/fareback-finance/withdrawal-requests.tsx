@@ -278,7 +278,7 @@ export function WithdrawalRequests({
 
                 {/* Action buttons */}
                 {r.type === "money" ? (
-                  <form action={adminProcessWithdrawalFormAction} className="flex gap-2">
+                  <form action={async (fd) => { await adminProcessWithdrawalFormAction(fd); }} className="flex gap-2">
                     <input type="hidden" name="requestId" value={r.id} />
                     <Button
                       type="submit"
@@ -302,7 +302,7 @@ export function WithdrawalRequests({
                   </form>
                 ) : (
                   <form
-                    action={adminProcessAmazonGiftCardRequestFormAction}
+                    action={async (fd) => { await adminProcessAmazonGiftCardRequestFormAction(fd); }}
                     className="flex flex-col items-end gap-2"
                   >
                     <input type="hidden" name="requestId" value={r.id} />

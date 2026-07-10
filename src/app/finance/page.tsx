@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { desc, eq, sql } from "drizzle-orm";
+import { decryptField } from "@/lib/security/encryption";
 import { getCurrentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import {
@@ -93,7 +94,7 @@ export default async function FinancePage() {
       .select({
         id: withdrawalRequests.id,
         amountInPaise: withdrawalRequests.amountInPaise,
-        upiId: withdrawalRequests.upiId,
+        upiIdEncrypted: withdrawalRequests.upiIdEncrypted,
         userName: users.name,
         userEmail: users.email,
         createdAt: withdrawalRequests.createdAt,
@@ -102,7 +103,13 @@ export default async function FinancePage() {
       .innerJoin(users, eq(users.id, withdrawalRequests.userId))
       .where(eq(withdrawalRequests.status, "pending"))
       .orderBy(desc(withdrawalRequests.createdAt))
-      .limit(50),
+      .limit(50)
+      .then((reqs) =>
+        reqs.map((r) => ({
+          ...r,
+          upiId: decryptField(r.upiIdEncrypted),
+        })),
+      ),
 
     // ── 4. Pending amazon gift card requests ─────────────────────────────
     db
@@ -133,7 +140,8 @@ export default async function FinancePage() {
       .from(users)
       .leftJoin(wallets, eq(wallets.userId, users.id))
       .groupBy(users.id)
-      .orderBy(desc(users.createdAt)),
+      .orderBy(desc(users.createdAt))
+      .limit(100),
 
     // ── 6. Recent clicks with merchant + user info ───────────────────────
     db
@@ -154,7 +162,7 @@ export default async function FinancePage() {
       })
       .from(clicks)
       .innerJoin(users, eq(users.id, clicks.userId))
-      .innerJoin(merchants, eq(merchants.id, clicks.merchantId))
+      .leftJoin(merchants, eq(merchants.id, clicks.merchantId))
       .orderBy(desc(clicks.createdAt))
       .limit(100),
 
@@ -185,7 +193,7 @@ export default async function FinancePage() {
       pendingWithdrawals={pendingWithdrawals}
       pendingGiftCards={pendingGiftCards}
       users={allUsers}
-      clicks={recentClicks}
+      clicks={recentClicks.map(c => ({ ...c, merchantName: c.merchantName || "Unknown" }))}
       walletTransactions={recentWalletTransactions}
     />
   );

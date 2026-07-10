@@ -100,15 +100,21 @@ const Page = async () => {
     }
   }
 
-  const featuredHeroMerchants = featuredHeroMerchantRecords
-    .slice(0, 8)
-    .map((merchant) => ({
-      id: merchant.id,
-      name: merchant.name,
-      cashbackRate: merchant.cashbackRate,
-      logoUrl: merchant.logoUrl,
-      href: `/merchants?merchantId=${merchant.id}`,
-    }));
+  const featuredHeroMerchants =
+    featuredHeroMerchantRecords.length > 0
+      ? featuredHeroMerchantRecords.slice(0, 8).map((merchant) => ({
+          id: merchant.id,
+          name: merchant.name,
+          cashbackRate: merchant.cashbackRate,
+          logoUrl: merchant.logoUrl,
+          href: `/merchants?merchantId=${merchant.id}`,
+        }))
+      : [
+          { id: 1, name: "Amazon", cashbackRate: "Up to 5.0%", logoUrl: "/merchants/amazon.svg", href: "/stores" },
+          { id: 2, name: "Flipkart", cashbackRate: "Up to 3.7%", logoUrl: "/merchants/flipkart.svg", href: "/stores" },
+          { id: 3, name: "Myntra", cashbackRate: "Up to 4.0%", logoUrl: "/merchants/myntra.svg", href: "/stores" },
+          { id: 4, name: "AJIO", cashbackRate: "Up to 6.0%", logoUrl: "/merchants/ajio.svg", href: "/stores" },
+        ];
 
   const defaultFavoritePlatform =
     visibleMerchantList.slice().sort((a, b) => a.name.localeCompare(b.name))[0]
@@ -193,13 +199,14 @@ const Page = async () => {
       ? featuredHeroMerchants.map((merchant) => ({
           name: merchant.name,
           rate: merchant.cashbackRate,
+          logoUrl: merchant.logoUrl,
         }))
       : [
-          { name: "Amazon", rate: "Up to 5.0%" },
-          { name: "Flipkart", rate: "Up to 3.7%" },
-          { name: "Myntra", rate: "Up to 4.0%" },
-          { name: "AJIO", rate: "Up to 6.0%" },
-          { name: "Croma", rate: "Up to 2.5%" },
+          { name: "Amazon", rate: "Up to 5.0%", logoUrl: "/merchants/amazon.svg" },
+          { name: "Flipkart", rate: "Up to 3.7%", logoUrl: "/merchants/flipkart.svg" },
+          { name: "Myntra", rate: "Up to 4.0%", logoUrl: "/merchants/myntra.svg" },
+          { name: "AJIO", rate: "Up to 6.0%", logoUrl: "/merchants/ajio.svg" },
+          { name: "Croma", rate: "Up to 2.5%", logoUrl: null },
         ];
 
   const repeatedMarqueeItems = [...marqueeItems, ...marqueeItems];
@@ -426,6 +433,13 @@ const Page = async () => {
                     key={`${item.name}-${index}`}
                     className="mx-4 inline-flex items-center gap-3 text-2xl font-black tracking-tight text-transparent sm:text-4xl"
                   >
+                    <div className="flex h-12 w-12 sm:h-16 sm:w-16 items-center justify-center rounded-2xl bg-white/5 p-2 shadow-sm border border-foreground/10 dark:border-white/10">
+                      <MerchantLogo
+                        name={item.name}
+                        logoUrl={item.logoUrl}
+                        className="h-full w-full object-contain grayscale opacity-60 transition-all hover:grayscale-0 hover:opacity-100"
+                      />
+                    </div>
                     <span className="bg-gradient-to-r from-foreground/25 via-foreground/18 to-foreground/8 bg-clip-text dark:from-muted-foreground/35 dark:via-muted-foreground/22 dark:to-muted-foreground/10">
                       {item.name}
                     </span>

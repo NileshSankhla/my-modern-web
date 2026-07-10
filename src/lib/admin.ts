@@ -33,6 +33,13 @@ export const requireAdminUser = async () => {
         .update(users)
         .set({ isAdmin: true, updatedAt: new Date() })
         .where(eq(users.id, user.id));
+        
+      import("@/lib/security/audit").then(({ logSecurityEvent, SECURITY_EVENTS }) => {
+        logSecurityEvent(SECURITY_EVENTS.ADMIN_AUTO_PROMOTED, {
+          actorId: user.id,
+          metadata: { email: user.email },
+        });
+      });
     }
 
     return { ...user, isAdmin: true };

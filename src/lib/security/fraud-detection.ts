@@ -15,7 +15,7 @@
 // ============================================================================
 
 import "server-only";
-import { and, eq, gte, sql } from "drizzle-orm";
+import { and, eq, gte, sql, not } from "drizzle-orm";
 import { db } from "../db";
 import {
   withdrawalRequests,
@@ -23,6 +23,7 @@ import {
   auditLogs,
 } from "../db/schema";
 import { logSecurityEvent, SECURITY_EVENTS } from "./audit";
+import { hashForComparison } from "@/lib/security/encryption";
 
 export interface FraudCheckResult {
   allowed: boolean;
@@ -79,7 +80,18 @@ export const checkWithdrawalFraud = async (
     .where(
       and(
         eq(withdrawalRequests.userId, userId),
-        eq(withdrawalRequests.upiId, upiId.toLowerCase()),
+        eq(withdrawalRequests.upiIdHash, hashForComparison(upiId.toLowerCase())),
+      ),
+    )
+    .limit(1);
+
+  const [duplicateUpi] = await db
+    .select()
+    .from(withdrawalRequests)
+    .where(
+      and(
+        not(eq(withdrawalRequests.userId, userId)),
+        eq(withdrawalRequests.upiIdHash, hashForComparison(upiId.toLowerCase())),
       ),
     )
     .limit(1);

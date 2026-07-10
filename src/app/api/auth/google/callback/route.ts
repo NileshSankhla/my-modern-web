@@ -8,6 +8,7 @@ import { createSession, hashPassword } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { isConfiguredAdminEmail } from "@/lib/admin";
+import { logSecurityEvent, SECURITY_EVENTS } from "@/lib/security/audit";
 import { sendWelcomeEmail } from "@/lib/email";
 import { ensureWalletsForUser } from "@/lib/wallet";
 
@@ -157,11 +158,16 @@ export async function GET(request: NextRequest) {
           error: welcomeEmailResult.error,
         });
       }
+
+      await logSecurityEvent(SECURITY_EVENTS.SIGN_UP_SUCCESS, {
+        actorId: createdUser.id,
+        metadata: { provider: "google", email },
+      });
     }
 
     await createSession(existingUser.id);
 
-    if (email === "lkkhatri0704@gmail.com") {
+    if (isConfiguredAdminEmail(email)) {
       redirect("/finance");
     }
   } catch (error) {

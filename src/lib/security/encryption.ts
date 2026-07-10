@@ -183,8 +183,16 @@ export const rotateEncryption = (
 // be compared with timingSafeEqual.
 
 export const hashForComparison = (value: string): string => {
-  const secret = process.env.COMPARISON_SECRET ?? "fareback-comparison-v1";
-  return createHash("sha256").update(`${value}.${secret}`).digest("hex");
+  const secret = process.env.COMPARISON_SECRET;
+  if (!secret) {
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("COMPARISON_SECRET environment variable is missing in production.");
+    }
+  }
+  const activeSecret = secret || "fareback-comparison-v1";
+  return createHash("sha256")
+    .update(value + activeSecret)
+    .digest("hex");
 };
 
 export const compareHashed = (a: string, b: string): boolean => {

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, inArray } from "drizzle-orm";
 import {
   Clock,
   LogOut,
@@ -196,7 +196,7 @@ const DashboardPage = async () => {
       .where(
         and(
           eq(withdrawalRequests.userId, user.id),
-          eq(withdrawalRequests.status, "pending"),
+          inArray(withdrawalRequests.status, ["pending", "approved"]),
         ),
       )
       .limit(1),
@@ -210,7 +210,7 @@ const DashboardPage = async () => {
       .where(
         and(
           eq(amazonGiftCardRequests.userId, user.id),
-          eq(amazonGiftCardRequests.status, "pending"),
+          inArray(amazonGiftCardRequests.status, ["pending", "approved"]),
         ),
       )
       .limit(1),
@@ -303,10 +303,7 @@ const DashboardPage = async () => {
                 </h2>
               </div>
 
-              <WithdrawRequestForm
-                hasPendingRequest={Boolean(pendingWithdrawal)}
-                walletType="cashback"
-              />
+              <WithdrawRequestForm hasPendingRequest={!!pendingWithdrawal} userEmail={user.email} walletType="cashback" />
 
               {pendingWithdrawal ? (
                 <div className="mt-4 flex items-start gap-3 rounded-xl border border-warning/20 bg-warning/10 p-4 text-warning">
@@ -352,10 +349,7 @@ const DashboardPage = async () => {
                 </h2>
               </div>
 
-              <WithdrawRequestForm
-                hasPendingRequest={Boolean(pendingAmazonRequest)}
-                walletType="amazon_rewards"
-              />
+              <WithdrawRequestForm hasPendingRequest={!!pendingAmazonRequest} walletType="amazon_rewards" userEmail={user.email} />
 
               {pendingAmazonRequest ? (
                 <div className="mt-4 flex items-start gap-3 rounded-xl border border-warning/20 bg-warning/10 p-4 text-warning">

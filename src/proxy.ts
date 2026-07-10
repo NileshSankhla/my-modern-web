@@ -39,7 +39,7 @@ const EXEMPT_PATTERNS = [
   /^\/api\/security\/report-csp$/, // CSP reports come from browser
 ];
 
-export async function proxy(request: NextRequest) {
+export default async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const method = request.method;
 

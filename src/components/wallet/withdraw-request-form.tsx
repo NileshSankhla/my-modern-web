@@ -11,14 +11,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
-const SubmitButton = ({ isAmazonRewards }: { isAmazonRewards: boolean }) => {
+const SubmitButton = ({ isAmazonRewards, disabled }: { isAmazonRewards: boolean, disabled: boolean }) => {
   const { pending } = useFormStatus();
 
   return (
     <Button
       type="submit"
       className="h-12 w-full text-base font-bold shadow-[0_0_15px_hsl(var(--primary)/0.2)] transition-all hover:scale-[1.02] hover:shadow-[0_0_25px_hsl(var(--primary)/0.4)]"
-      disabled={pending}
+      disabled={pending || disabled}
     >
       {pending ? (
         isAmazonRewards ? "Processing Gift Card Request..." : "Processing Request..."
@@ -35,15 +35,17 @@ const SubmitButton = ({ isAmazonRewards }: { isAmazonRewards: boolean }) => {
 interface WithdrawRequestFormProps {
   hasPendingRequest: boolean;
   walletType?: "cashback" | "amazon_rewards";
+  userEmail: string;
 }
 
-const WithdrawRequestForm = ({ hasPendingRequest, walletType = "cashback" }: WithdrawRequestFormProps) => {
+const WithdrawRequestForm = ({ hasPendingRequest, walletType = "cashback", userEmail }: WithdrawRequestFormProps) => {
   const isAmazonRewards = walletType === "amazon_rewards";
   const destinationFieldId = isAmazonRewards ? "amazon-reward-destination" : "upiId";
   const [state, formAction] = useActionState(
     isAmazonRewards ? createAmazonGiftCardRequestAction : createWithdrawalRequestAction,
     {},
   );
+  const isDisabled = hasPendingRequest || state.success !== undefined;
 
   return (
     <form action={formAction} className="space-y-5">
@@ -58,7 +60,7 @@ const WithdrawRequestForm = ({ hasPendingRequest, walletType = "cashback" }: Wit
         {isAmazonRewards ? (
           <Input
             id={destinationFieldId}
-            value="Your Fareback mail"
+            value={userEmail}
             readOnly
             disabled
             className="h-12 text-base focus-visible:ring-primary/50"
@@ -70,7 +72,7 @@ const WithdrawRequestForm = ({ hasPendingRequest, walletType = "cashback" }: Wit
             placeholder="yourname@okaxis"
             autoComplete="off"
             required
-            disabled={hasPendingRequest}
+            disabled={isDisabled}
             className="h-12 text-base focus-visible:ring-primary/50"
           />
         )}
@@ -94,7 +96,7 @@ const WithdrawRequestForm = ({ hasPendingRequest, walletType = "cashback" }: Wit
             placeholder="0.00"
             inputMode="decimal"
             required
-            disabled={hasPendingRequest}
+            disabled={isDisabled}
             className="h-12 pl-12 text-lg font-semibold focus-visible:ring-primary/50"
           />
         </div>
@@ -116,7 +118,7 @@ const WithdrawRequestForm = ({ hasPendingRequest, walletType = "cashback" }: Wit
         <p className="text-center text-sm font-medium text-emerald-600 dark:text-emerald-400">{state.success}</p>
       ) : null}
 
-      <SubmitButton isAmazonRewards={isAmazonRewards} />
+      <SubmitButton isAmazonRewards={isAmazonRewards} disabled={isDisabled} />
     </form>
   );
 };

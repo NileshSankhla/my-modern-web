@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth";
+import { decryptField } from "@/lib/security/encryption";
 import PageShell from "@/components/ui/page-shell";
 import PageHeader from "@/components/ui/page-header";
 import { db } from "@/lib/db";
@@ -33,7 +34,7 @@ export default async function PaymentHistoryPage() {
         id: withdrawalRequests.id,
         amountInPaise: withdrawalRequests.amountInPaise,
         status: withdrawalRequests.status,
-        upiId: withdrawalRequests.upiId,
+        upiIdEncrypted: withdrawalRequests.upiIdEncrypted,
         adminNote: withdrawalRequests.adminNote,
         createdAt: withdrawalRequests.createdAt,
         processedAt: withdrawalRequests.processedAt,
@@ -41,7 +42,13 @@ export default async function PaymentHistoryPage() {
       .from(withdrawalRequests)
       .where(eq(withdrawalRequests.userId, user.id))
       .orderBy(desc(withdrawalRequests.createdAt))
-      .limit(100),
+      .limit(100)
+      .then((reqs) =>
+        reqs.map((r) => ({
+          ...r,
+          upiId: decryptField(r.upiIdEncrypted),
+        })),
+      ),
 
     db
       .select({

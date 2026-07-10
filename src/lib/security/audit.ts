@@ -17,6 +17,7 @@
 import "server-only";
 import { db } from "../db";
 import { auditLogs } from "../db/schema";
+import { desc } from "drizzle-orm";
 
 // ── Security event types ────────────────────────────────────────────────────
 
@@ -237,7 +238,7 @@ export const logSecurityEvent = async (
     const [lastEntry] = await db
       .select({ chainHash: auditLogs.metadata })
       .from(auditLogs)
-      .orderBy(auditLogs.createdAt)
+      .orderBy(desc(auditLogs.createdAt))
       .limit(1);
 
     const previousHash =

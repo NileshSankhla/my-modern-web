@@ -349,7 +349,7 @@ export async function GET(request: NextRequest) {
         destinationUrl = TEST_MERCHANT_HOMEPAGES[merchantNameKey];
       }
 
-      const subid = user.name || user.email.split("@")[0];
+      const subid = createHash("sha256").update(`user-${user.id}`).digest("hex").substring(0, 12);
       destinationUrl = appendSubidParam(destinationUrl, subid);
     } catch {
       // Keep base URL if manipulation fails.

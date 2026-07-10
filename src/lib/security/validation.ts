@@ -64,6 +64,7 @@ export const walletAdjustmentSchema = z.object({
     .regex(/^\d+(\.\d{1,2})?$/, "Enter a valid amount")
     .refine((v) => parseFloat(v) > 0, "Amount must be positive")
     .refine((v) => parseFloat(v) < 100000, "Amount too large"),
+  idempotencyKey: z.string().trim().optional(),
 });
 
 export const withdrawalRequestSchema = z.object({

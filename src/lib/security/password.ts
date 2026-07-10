@@ -167,9 +167,17 @@ export const isPasswordBreached = async (
   password: string,
 ): Promise<{ breached: boolean; count: number }> => {
   try {
+    // NOTE: SHA-1 is used here INTENTIONALLY and CORRECTLY.
+    // The HaveIBeenPwned k-anonymity API mandates SHA-1 as the hashing scheme
+    // for its range API. This hash is NOT used for password storage — it is
+    // only used to construct the API query prefix. Password storage uses
+    // Argon2id (see hashPassword above). The full password never leaves the
+    // server; only the first 5 hex characters of this SHA-1 are sent to HIBP.
+    // nosemgrep: use-of-sha1, weak-crypto
     const sha1 = createHash("sha1").update(password).digest("hex").toUpperCase();
     const prefix = sha1.substring(0, 5);
     const suffix = sha1.substring(5);
+
 
     const response = await fetch(
       `https://api.pwnedpasswords.com/range/${prefix}`,

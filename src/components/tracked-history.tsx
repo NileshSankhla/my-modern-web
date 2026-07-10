@@ -39,7 +39,7 @@ const STATUS_CONFIG = {
     amountClass: "",
   },
   tracked: {
-    label: "Tracked — Awaiting Approval",
+    label: "Tracked",
     detail: "Purchase confirmed by merchant. Finance team is reviewing and setting your cashback reward.",
     icon: Clock,
     badgeClass:

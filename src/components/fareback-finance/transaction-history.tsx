@@ -472,7 +472,7 @@ export function TransactionHistory({ clicks = EMPTY }: TransactionHistoryProps) 
                 <div className="space-y-3 pt-1">
                   <div className="rounded-xl border border-slate-100 bg-slate-50 p-3">
                     <p className="text-xs font-bold text-slate-700 mb-1">Mark as Tracked (Merchant Confirmed)</p>
-                    <p className="text-[11px] text-slate-500">Optional: pre-set the expected cashback amount. You can change it when approving later.</p>
+                    <p className="text-[11px] text-slate-500">Required: set the expected cashback amount.</p>
                   </div>
                   <div className="flex gap-2">
                     <form action={adminMarkClickTrackedFormAction} className="flex flex-1 gap-2">
@@ -484,7 +484,8 @@ export function TransactionHistory({ clicks = EMPTY }: TransactionHistoryProps) 
                           type="number"
                           min="0.01"
                           step="0.01"
-                          placeholder="Expected cashback (optional)"
+                          placeholder="Expected cashback"
+                          required
                           className="pl-7 border-slate-200 focus-visible:ring-emerald-500/30"
                         />
                       </div>
@@ -652,17 +653,7 @@ function TxRow({ tx, section, onViewDetails }: TxRowProps) {
         {/* Quick inline actions */}
         {section === "not_review" && (
           <>
-            <form action={adminMarkClickTrackedFormAction}>
-              <input type="hidden" name="clickId" value={tx.id} />
-              <Button
-                type="submit"
-                size="sm"
-                variant="outline"
-                className="h-8 border-emerald-200 bg-emerald-50 text-xs font-semibold text-emerald-700 hover:bg-emerald-100"
-              >
-                <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> Tracked
-              </Button>
-            </form>
+
             <form action={adminDeleteUnreviewedClickFormAction}>
               <input type="hidden" name="clickId" value={tx.id} />
               <Button

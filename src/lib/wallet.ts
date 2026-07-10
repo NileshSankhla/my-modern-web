@@ -24,10 +24,12 @@ import { z } from "zod";
 export const DEFAULT_WALLET_TYPE = "cashback";
 export const AMAZON_REWARDS_WALLET_TYPE = "amazon_rewards";
 // Initialize Redis for idempotency
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
+const redis = process.env.UPSTASH_REDIS_REST_URL
+  ? new Redis({
+      url: process.env.UPSTASH_REDIS_REST_URL,
+      token: process.env.UPSTASH_REDIS_REST_TOKEN || "",
+    })
+  : null;
 
 // Constants
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60; // 24 hours
@@ -162,13 +164,11 @@ async function getLockedWallet(
 async function checkIdempotency(
   idempotencyKey: string | null | undefined,
 ): Promise<IdempotencyCheckResult> {
-  if (!idempotencyKey) {
-    return { isDuplicate: false };
-  }
+  if (!idempotencyKey || !redis) return { isDuplicate: false };
 
   try {
     const redisKey = `idempotency:${idempotencyKey}`;
-    const cached = await redis.get(redisKey);
+    const cached = await redis!.get(redisKey);
 
     if (cached) {
       const parsed = typeof cached === 'string' ? JSON.parse(cached) : cached as any;
@@ -197,7 +197,7 @@ async function markIdempotencyProcessing(
 ): Promise<void> {
   try {
     const redisKey = `idempotency:${idempotencyKey}`;
-    const setResult = await redis.set(
+    const setResult = await redis!.set(
       redisKey,
       JSON.stringify({
         status: "processing",
@@ -207,11 +207,10 @@ async function markIdempotencyProcessing(
     );
 
     if (!setResult) {
-      // Key already exists — another process may be handling this
-      // But we rely on DB unique constraint as the hard guard, so only warn
-      console.warn("[wallet] Idempotency key already processing, relying on DB constraint:", idempotencyKey);
+      throw new IdempotencyConflictError(idempotencyKey);
     }
   } catch (err) {
+    if (err instanceof IdempotencyConflictError) throw err;
     // Redis unavailable — non-fatal, DB unique constraint guards against duplicates
     console.warn("[wallet] Redis markIdempotencyProcessing failed (non-fatal):", (err as Error).message);
   }
@@ -224,7 +223,7 @@ async function completeIdempotency(
 ): Promise<void> {
   try {
     const redisKey = `idempotency:${idempotencyKey}`;
-    await redis.set(
+    await redis!.set(
       redisKey,
       JSON.stringify({
         status: "complete",
@@ -243,7 +242,7 @@ async function completeIdempotency(
 async function clearIdempotency(idempotencyKey: string): Promise<void> {
   try {
     const redisKey = `idempotency:${idempotencyKey}`;
-    await redis.del(redisKey);
+    await redis!.del(redisKey);
   } catch (err) {
     console.warn("[wallet] Redis clearIdempotency failed (non-fatal):", (err as Error).message);
   }
@@ -375,8 +374,10 @@ async function executeMutation(
         balanceAfterInPaise: newBalance,
         sequenceNumber,
         note: params.sourceReference,
+        internalNote: params.transactionType,
         sourceClickId,
         adminUserId,
+        idempotencyKey: params.idempotencyKey,
       }).returning({ id: walletTransactions.id });
 
       const transactionId = insertedTx.id;
@@ -538,8 +539,18 @@ export async function getWalletBalance(
     return { balanceInPaise: 0, walletId: 0 };
   }
 
+  // Enterprise-grade: verify with latest ledger entry
+  const [latestTx] = await db
+    .select({ balanceAfterInPaise: walletTransactions.balanceAfterInPaise })
+    .from(walletTransactions)
+    .where(eq(walletTransactions.walletId, result[0].id))
+    .orderBy(desc(walletTransactions.sequenceNumber))
+    .limit(1);
+
+  const realBalance = latestTx ? latestTx.balanceAfterInPaise : 0;
+
   return {
-    balanceInPaise: result[0].balanceInPaise,
+    balanceInPaise: realBalance,
     walletId: result[0].id,
   };
 }
@@ -606,7 +617,7 @@ export async function getTransactionHistory(
     id: t.id,
     walletId: t.walletId!,
     userId: t.userId,
-    transactionType: "MANUAL_CREDIT", // We don't have the original transactionType in the DB, only credit/debit
+    transactionType: (t.internalNote as any) || (t.type === "credit" ? "MANUAL_CREDIT" : "WITHDRAWAL"),
     amountInPaise: t.amountInPaise,
     balanceAfterInPaise: t.balanceAfterInPaise!,
     sequenceNumber: t.sequenceNumber!,

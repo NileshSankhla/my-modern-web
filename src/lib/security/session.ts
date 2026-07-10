@@ -12,7 +12,7 @@
 // ============================================================================
 
 import "server-only";
-import { randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import { randomBytes, createHmac, timingSafeEqual } from "node:crypto";
 import { and, eq, gt, lt, sql } from "drizzle-orm";
 import { cookies } from "next/headers";
 import { cache } from "react";
@@ -47,8 +47,10 @@ interface SessionMeta {
 export const generateSessionToken = (): string =>
   randomBytes(32).toString("hex");
 
-export const hashSessionToken = (token: string): string =>
-  createHash("sha256").update(token).digest("hex");
+export const hashSessionToken = (token: string): string => {
+  const secret = process.env.SESSION_SECRET || "default-dev-secret-do-not-use-in-prod";
+  return createHmac("sha256", secret).update(token).digest("hex");
+};
 
 export const verifySessionTokenHash = (
   token: string,
