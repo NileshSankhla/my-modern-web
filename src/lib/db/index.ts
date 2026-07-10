@@ -21,8 +21,7 @@ if (/localhost|127\.0\.0\.1/.test(connectionString)) {
 neonConfig.webSocketConstructor = ws;
 // Route simple pool.query calls through fetch to avoid websocket upgrade flakiness
 // in local Next.js dev, while still allowing explicit pooled transactions.
-//neonConfig.poolQueryViaFetch = true;
-
+neonConfig.poolQueryViaFetch = true;
 const globalForDb = globalThis as typeof globalThis & {
   farebackPool?: Pool;
 };

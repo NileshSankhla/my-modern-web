@@ -10,6 +10,7 @@ export const walletAdjustmentSchema = z.object({
     .regex(/^\d+(\.\d{1,2})?$/, {
       message: "Enter a valid amount with up to 2 decimal places.",
     }),
+  idempotencyKey: z.string().trim().optional(),
 });
 
 export const withdrawalRequestSchema = z.object({

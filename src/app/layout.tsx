@@ -11,10 +11,14 @@ export const viewport: Viewport = {
 };
 import "./globals.css";
 import Providers from "@/components/providers";
-import Navbar from "@/components/navbar";
-import Footer from "@/components/footer";
 import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
+import { Inter } from "next/font/google";
+
+const inter = Inter({ 
+  subsets: ["latin"], 
+  variable: "--font-sans",
+});
 
 export const metadata: Metadata = {
   metadataBase: new URL(process.env.NEXT_PUBLIC_APP_URL ?? "https://fareback.in"),
@@ -91,17 +95,10 @@ const RootLayout = ({
 }>) => {
   return (
     // 3. IMPORTANT: suppressHydrationWarning is required on <html> for next-themes
-    <html lang="en" suppressHydrationWarning className="scroll-smooth" data-scroll-behavior="smooth">
+    <html lang="en" suppressHydrationWarning className={`scroll-smooth ${inter.variable}`} data-scroll-behavior="smooth">
       <body className="min-h-screen bg-background font-sans antialiased">
         <Providers>
-          <div
-            id="booster_root"
-            className="relative flex min-h-screen flex-col"
-          >
-            <Navbar />
-            <main className="flex-1">{children}</main>
-            <Footer />
-          </div>
+          {children}
         </Providers>
         <Analytics />
         <SpeedInsights />

@@ -1,4 +1,8 @@
 import { defineConfig } from "drizzle-kit";
+import { neonConfig } from "@neondatabase/serverless";
+import ws from "ws";
+
+neonConfig.webSocketConstructor = ws;
 
 // Migrations (db:push / db:migrate / db:studio) use the UNPOOLED (direct)
 // connection so that DDL statements work correctly against Neon.

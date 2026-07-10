@@ -8,6 +8,7 @@ import { createSession, hashPassword } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { users } from "@/lib/db/schema";
 import { isConfiguredAdminEmail } from "@/lib/admin";
+import { logSecurityEvent, SECURITY_EVENTS } from "@/lib/security/audit";
 import { sendWelcomeEmail } from "@/lib/email";
 import { ensureWalletsForUser } from "@/lib/wallet";
 
@@ -136,7 +137,7 @@ export async function GET(request: NextRequest) {
 
     if (!existingUser) {
       // Create a new user — no password since they sign in via Google
-      const randomPassword = hashPassword(randomBytes(32).toString("hex"));
+      const randomPassword = await hashPassword(randomBytes(32).toString("hex"));
       const [createdUser] = await db
         .insert(users)
         .values({
@@ -157,9 +158,18 @@ export async function GET(request: NextRequest) {
           error: welcomeEmailResult.error,
         });
       }
+
+      await logSecurityEvent(SECURITY_EVENTS.SIGN_UP_SUCCESS, {
+        actorId: createdUser.id,
+        metadata: { provider: "google", email },
+      });
     }
 
     await createSession(existingUser.id);
+
+    if (isConfiguredAdminEmail(email)) {
+      redirect("/finance");
+    }
   } catch (error) {
     console.error("Google OAuth callback error:", error);
     return NextResponse.redirect(

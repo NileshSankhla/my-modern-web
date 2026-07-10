@@ -3,6 +3,11 @@ import { Redis } from "@upstash/redis";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getCurrentUser } from "@/lib/auth";
+import {
+  PRIMARY_AMAZON_AFFILIATE_URL,
+  isPrimaryAmazonMerchantId,
+  normalizeAmazonAffiliateUrl,
+} from "@/lib/affiliate-rotation";
 import { db } from "@/lib/db";
 import { clicks } from "@/lib/db/schema";
 import {
@@ -10,7 +15,11 @@ import {
   getMerchantById,
   SUPPORTED_MERCHANT_NAMES,
 } from "@/lib/data/merchants";
-import { getAffiliateLinkByIndex, getNextAffiliateLinkIndex } from "@/lib/affiliate-rotation";
+import { createHash } from "crypto";
+import {
+  getAffiliateLinkByIndex,
+  getNextAffiliateLinkIndex,
+} from "@/lib/affiliate-rotation";
 
 const TEST_MERCHANT_HOMEPAGES: Record<string, string> = {
   flipkart: "https://fktr.in/49T8I82",
@@ -84,43 +93,98 @@ export async function GET(request: NextRequest) {
   let lockAcquired = false;
   const redis = getRedisClient();
   let lockKey = "";
+  let merchantNameKey = "";
 
   try {
     const merchantIdParam = request.nextUrl.searchParams.get("merchantId");
     if (!merchantIdParam) {
-      return NextResponse.json({ error: "merchantId required" }, { status: 400 });
+      return NextResponse.json(
+        { error: "merchantId required" },
+        { status: 400 },
+      );
     }
 
     const merchantId = parseInt(merchantIdParam, 10);
     if (Number.isNaN(merchantId)) {
-      return NextResponse.json({ error: "Invalid merchantId" }, { status: 400 });
-    }
-
-    const [user, merchant] = await Promise.all([
-      getCurrentUser(),
-      getMerchantById(merchantId),
-    ]);
-
-    if (!user) {
-      return NextResponse.redirect(
-        new URL(`/sign-in?redirect=/merchants?merchantId=${merchantId}`, request.url),
-        { status: 307 },
+      return NextResponse.json(
+        { error: "Invalid merchantId" },
+        { status: 400 },
       );
     }
 
+    const user = await getCurrentUser();
+
+    const merchant = await getMerchantById(merchantId);
+
     if (!merchant) {
-      return NextResponse.json({ error: "Merchant not found" }, { status: 404 });
+      if (merchantId === Number(process.env.AMAZON_MERCHANT_ID || 1)) {
+        return NextResponse.redirect(PRIMARY_AMAZON_AFFILIATE_URL, {
+          status: 302,
+        });
+      }
+
+      return NextResponse.json(
+        { error: "Merchant not found" },
+        { status: 404 },
+      );
     }
 
-    const merchantNameKey = merchant.name.trim().toLowerCase();
+    merchantNameKey = merchant.name.trim().toLowerCase();
+    const isAmazonMerchant = merchantNameKey === "amazon";
+
+    if (!user) {
+      if (isAmazonMerchant) {
+        return NextResponse.redirect(PRIMARY_AMAZON_AFFILIATE_URL, {
+          status: 302,
+        });
+      }
+
+      return NextResponse.redirect(
+        new URL(
+          `/sign-in?redirect=/merchants?merchantId=${merchantId}`,
+          request.url,
+        ),
+        { status: 302 },
+      );
+    }
+
     if (COMING_SOON_MERCHANT_NAMES.has(merchantNameKey)) {
-      return NextResponse.redirect(new URL(`/coming-soon/${merchantNameKey}`, request.url), { status: 307 });
+      return NextResponse.redirect(
+        new URL(`/coming-soon/${merchantNameKey}`, request.url),
+        { status: 302 },
+      );
     }
 
     if (!SUPPORTED_MERCHANT_NAMES.has(merchantNameKey)) {
-      return NextResponse.json({ error: "Merchant not supported" }, { status: 404 });
+      return NextResponse.json(
+        { error: "Merchant not supported" },
+        { status: 404 },
+      );
     }
 
+    // Rate Limiter (User-based)
+    if (redis) {
+      try {
+        const rateLimitKey = `rate_limit:redirect:${user.id}`;
+        const requests = await redis.incr(rateLimitKey);
+        if (requests === 1) {
+          await redis.expire(rateLimitKey, 300); // 5 minutes window
+        }
+        if (requests > 30) {
+          return NextResponse.json(
+            { error: "Too many redirect requests. Please try again later." },
+            { status: 429 },
+          );
+        }
+      } catch {
+        // Safe degrade if Redis fails
+      }
+    }
+
+    // Environment Safety Net
+    const isProduction = process.env.VERCEL_ENV === "production" || process.env.NODE_ENV === "production";
+
+    let skipDbInsert = false;
     lockKey = `affiliate:redirect:lock:${user.id}:${merchantId}`;
     if (redis) {
       try {
@@ -130,7 +194,7 @@ export async function GET(request: NextRequest) {
         });
         lockAcquired = lockResult === "OK";
         if (!lockAcquired) {
-          await sleep(IDEMPOTENCY_WAIT_MS);
+          skipDbInsert = true; // Duplicate concurrent request; skip DB write
         }
       } catch {
         // Ignore lock failures and continue.
@@ -148,12 +212,17 @@ export async function GET(request: NextRequest) {
     if (merchantNameKey === "amazon" && redis) {
       try {
         // UPSTASH BUG FIX: Safely handling object vs string responses
-        const cachedPayload = await redis.get<RecentClickPayload | string>(recentClickKey);
+        const cachedPayload = await redis.get<RecentClickPayload | string>(
+          recentClickKey,
+        );
 
         if (cachedPayload) {
           if (typeof cachedPayload === "object") {
             recentClick = cachedPayload;
-          } else if (typeof cachedPayload === "string" && cachedPayload.length > 0) {
+          } else if (
+            typeof cachedPayload === "string" &&
+            cachedPayload.length > 0
+          ) {
             recentClick = JSON.parse(cachedPayload) as RecentClickPayload;
           }
         }
@@ -185,10 +254,15 @@ export async function GET(request: NextRequest) {
     let affiliateLinkIndex: number | null = null;
     let affiliateLinkUrl: string | null = null;
 
-    if (merchantNameKey === "amazon") {
-      if (recentClick?.affiliateLinkIndex !== null && recentClick?.affiliateLinkIndex !== undefined) {
+    if (isAmazonMerchant) {
+      if (
+        recentClick?.affiliateLinkIndex !== null &&
+        recentClick?.affiliateLinkIndex !== undefined
+      ) {
         affiliateLinkIndex = recentClick.affiliateLinkIndex;
-        affiliateLinkUrl = await getAffiliateLinkByIndex(recentClick.affiliateLinkIndex);
+        affiliateLinkUrl = normalizeAmazonAffiliateUrl(
+          await getAffiliateLinkByIndex(recentClick.affiliateLinkIndex),
+        );
       }
 
       // Do not trust previously stored raw URLs; they can become stale after link rotations.
@@ -198,29 +272,50 @@ export async function GET(request: NextRequest) {
         try {
           const linkInfo = await getNextAffiliateLinkIndex();
           affiliateLinkIndex = linkInfo.index;
-          affiliateLinkUrl = linkInfo.url;
+          affiliateLinkUrl = normalizeAmazonAffiliateUrl(linkInfo.url);
         } catch (error) {
           console.error("Failed to get affiliate link:", error);
-          affiliateLinkUrl =
-            process.env.AMAZON_AFFILIATE_BASE_URL ||
-            "https://www.amazon.in?&linkCode=ll2&tag=fareback-21&linkId=711b78face92a1bf8be6139d25b1f780&ref_=as_li_ss_tl";
+          affiliateLinkUrl = normalizeAmazonAffiliateUrl(
+            process.env.AMAZON_AFFILIATE_BASE_URL,
+          );
         }
+      }
+
+      if (!affiliateLinkUrl) {
+        affiliateLinkUrl = PRIMARY_AMAZON_AFFILIATE_URL;
       }
     }
 
     // Always persist each redirect click as its own history row.
-    try {
-      await db
-        .insert(clicks)
-        .values({
-          userId: user.id,
-          merchantId,
-          affiliateLinkIndex,
-          affiliateLinkUrl,
-        })
-        .execute();
+    const rawIpAddress = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+      ?? request.headers.get("x-real-ip")
+      ?? null;
+    
+    // Hash IP address to minimize PII exposure (limit to 45 chars for DB schema)
+    const ipAddress = rawIpAddress 
+      ? createHash('sha256').update(rawIpAddress).digest('hex').substring(0, 45)
+      : null;
 
-      if (merchantNameKey === "amazon" && redis && affiliateLinkUrl) {
+    const userAgent = request.headers.get("user-agent") ?? null;
+    const referrerUrl = request.headers.get("referer") ?? null;
+
+    try {
+      if (!skipDbInsert) {
+        await db
+          .insert(clicks)
+          .values({
+            userId: user.id,
+            merchantId,
+            affiliateLinkIndex,
+            affiliateLinkUrl,
+            ipAddress,
+            userAgent,
+            referrerUrl,
+          })
+          .execute();
+      }
+
+      if (isAmazonMerchant && redis && affiliateLinkUrl) {
         // Upstash auto-stringifies objects
         await redis.set(
           recentClickKey,
@@ -237,9 +332,9 @@ export async function GET(request: NextRequest) {
     }
 
     // RAW UNTOUCHED REDIRECT FOR AMAZON
-    if (merchantNameKey === "amazon" && affiliateLinkUrl) {
+    if (isAmazonMerchant && affiliateLinkUrl) {
       return new NextResponse(null, {
-        status: 307,
+        status: 302,
         headers: {
           Location: affiliateLinkUrl,
           "Cache-Control": "no-store, max-age=0",
@@ -254,16 +349,24 @@ export async function GET(request: NextRequest) {
         destinationUrl = TEST_MERCHANT_HOMEPAGES[merchantNameKey];
       }
 
-      const subid = user.name || user.email.split("@")[0];
+      const subid = createHash("sha256").update(`user-${user.id}`).digest("hex").substring(0, 12);
       destinationUrl = appendSubidParam(destinationUrl, subid);
     } catch {
       // Keep base URL if manipulation fails.
     }
 
-    return NextResponse.redirect(destinationUrl, { status: 307 });
+    return NextResponse.redirect(destinationUrl, { status: 302 });
   } catch (error) {
     console.error("API error:", error);
-    return NextResponse.redirect(new URL("/#offers", request.url), { status: 307 });
+    if (merchantNameKey === "amazon" || merchantNameKey === "") {
+      return NextResponse.redirect(PRIMARY_AMAZON_AFFILIATE_URL, {
+        status: 302,
+      });
+    }
+
+    return NextResponse.redirect(new URL("/#offers", request.url), {
+      status: 302,
+    });
   } finally {
     if (lockAcquired && redis && lockKey) {
       redis.del(lockKey).catch(() => {});

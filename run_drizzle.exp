@@ -1,0 +1,14 @@
+#!/usr/bin/expect
+set timeout 10
+spawn bunx drizzle-kit generate
+expect {
+    "Is * table created or renamed from another table?" {
+        send "\r"
+        exp_continue
+    }
+    "Is * column created or renamed from another column?" {
+        send "\r"
+        exp_continue
+    }
+    eof
+}

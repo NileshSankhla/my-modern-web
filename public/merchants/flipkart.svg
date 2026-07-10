@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100%" height="100%">
+  <rect width="100" height="100" rx="22" fill="#2874F0"/>
+  <path d="M35 30H65V45C65 53.28 58.28 60 50 60C41.72 60 35 53.28 35 45V30Z" fill="#FFE500"/>
+  <rect x="42" y="22" width="16" height="14" rx="4" fill="none" stroke="#FFE500" stroke-width="4"/>
+  <text x="50" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-weight="900" font-size="14" fill="#FFFFFF" text-anchor="middle" letter-spacing="0.5">FLIPKART</text>
+</svg>

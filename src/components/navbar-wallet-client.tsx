@@ -65,7 +65,7 @@ const NavbarWalletClient = () => {
       >
         <Wallet className="h-4 w-4 text-primary" />
         <span>{formatPaiseAsINR(totalBalanceInPaise)}</span>
-        <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${isOpen ? "rotate-180" : ""}`} />
       </button>
 
       {isOpen && (

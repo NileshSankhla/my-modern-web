@@ -1,7 +1,7 @@
 "use client";
-
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
+import PageShell from "@/components/ui/page-shell";
 
 export default function Error({
   error,
@@ -15,14 +15,18 @@ export default function Error({
   }, [error]);
 
   return (
-    <div className="flex min-h-[400px] flex-col items-center justify-center">
-      <div className="text-center">
-        <h2 className="mb-4 text-2xl font-bold">Something went wrong!</h2>
-        <p className="mb-6 text-muted-foreground">
-          An error occurred while processing your request.
-        </p>
-        <Button onClick={() => reset()}>Try again</Button>
+    <PageShell>
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="text-center animate-in fade-in slide-in-from-bottom-4">
+          <h2 className="mb-4 text-3xl font-extrabold">Something went wrong</h2>
+          <p className="mb-6 text-muted-foreground">
+            An unexpected error occurred. Try refreshing or come back later.
+          </p>
+          <div className="flex justify-center">
+            <Button onClick={() => reset()}>Try again</Button>
+          </div>
+        </div>
       </div>
-    </div>
+    </PageShell>
   );
 }
