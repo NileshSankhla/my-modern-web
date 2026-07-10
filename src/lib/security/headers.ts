@@ -33,17 +33,20 @@ export const generateNonce = (): string => {
 export const buildCSP = (nonce: string, isDev: boolean = false): string => {
   const directives: string[] = [
     "default-src 'self'",
-    // Scripts: only our own, with nonce. No unsafe-eval in production.
+    // Scripts: nonce-based. In production, 'unsafe-inline' is ignored by
+    // browsers that support nonces, so it only serves as a fallback for
+    // older browsers. 'strict-dynamic' propagates trust to dynamically
+    // added scripts (e.g. Next.js RSC chunks, analytics).
     isDev
       ? `script-src 'self' 'nonce-${nonce}' 'unsafe-eval' 'unsafe-inline'`
-      : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
-    // Styles: Tailwind needs unsafe-inline. Add Google Fonts if used.
+      : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic' 'unsafe-inline'`,
+    // Styles: Tailwind and Next.js inject inline styles.
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "font-src 'self' https://fonts.gstatic.com data:",
-    // Images: allow from anywhere (user uploads, CDN, etc.)
+    // Images: allow from anywhere (user uploads, CDN, brand logos, etc.)
     "img-src 'self' data: https: blob:",
-    // Connections: only to our API + Neon + Upstash + Google APIs
-    "connect-src 'self' https://*.neon.tech https://*.upstash.io https://www.googleapis.com https://api.pwnedpasswords.com",
+    // Connections: our API + Neon + Upstash + Google + Vercel telemetry
+    "connect-src 'self' https://*.neon.tech https://*.upstash.io https://www.googleapis.com https://api.pwnedpasswords.com https://va.vercel-scripts.com https://vitals.vercel-insights.com",
     // Frames: none (prevents clickjacking)
     "frame-ancestors 'none'",
     "frame-src 'none'",
@@ -64,13 +67,10 @@ export const buildCSP = (nonce: string, isDev: boolean = false): string => {
     "report-to fareback-csp",
   ];
 
-  // Trusted Types (experimental, CSP Level 3) — production only
-  if (!isDev) {
-    directives.push(
-      "require-trusted-types-for 'script'",
-      "trusted-types fareback-policy default",
-    );
-  }
+  // NOTE: `require-trusted-types-for 'script'` is intentionally excluded.
+  // React and Next.js use innerHTML and dynamic script injection internally,
+  // which violates Trusted Types and causes a white screen in production.
+  // Re-enable only after auditing and patching all React DOM writes.
 
   return directives.join("; ");
 };

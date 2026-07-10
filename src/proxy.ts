@@ -1,5 +1,5 @@
 // ============================================================================
-// FAREBACK — Security Middleware (Next.js 16+)
+// FAREBACK — Security Proxy (Next.js 16+ middleware convention)
 // ============================================================================
 // Runs on every request. Applies:
 //   1. Security headers (CSP with nonce, HSTS, COOP/COEP, etc.)
