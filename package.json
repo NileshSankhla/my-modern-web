@@ -10,7 +10,7 @@
     "lint": "eslint src scripts",
     "typecheck": "tsc --noEmit",
     "test": "vitest",
-    "test:run": "vitest run",
+    "test:run": "vitest run --passWithNoTests",
     "load-test": "bun scripts/load-test.js",
     "load-test:quick": "bun scripts/load-test.js --url http://127.0.0.1:3000 --connections 50 --duration 20",
     "load-test:stress": "bun scripts/load-test.js --url http://127.0.0.1:3000 --connections 200 --duration 60",
@@ -54,12 +54,14 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@next/eslint-plugin-next": "16.2.10",
     "@tailwindcss/postcss": "^4.3.2",
     "@types/node": "26.1.1",
     "@types/pg": "^8.20.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
+    "@typescript-eslint/parser": "8.63.0",
     "autocannon": "^8.0.0",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.6.0",
