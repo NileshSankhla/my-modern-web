@@ -153,7 +153,7 @@ export const checkBot = async (
   // 2. Turnstile verification (if token provided)
   let turnstileScore = 0;
   if (options.turnstileToken) {
-    const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+    const ip = (request as any).ip ?? request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
     const turnstileResult = await verifyTurnstile(options.turnstileToken, ip);
     if (!turnstileResult.success) {
       return {

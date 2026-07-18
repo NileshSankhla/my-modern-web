@@ -755,11 +755,19 @@ export const adminApproveClickFormAction = async (formData: FormData) => {
         : DEFAULT_WALLET_TYPE);
 
     // ─── ATOMIC OPERATION: Credit wallet + Update click status in one DB transaction ───
-    // This prevents any inconsistency — either BOTH succeed or BOTH roll back.
-    // The wallet_transactions.sourceClickId UNIQUE constraint is the hard idempotency guard:
-    // even if this action is called twice concurrently, only one wallet_transaction row
-    // can exist per click, enforced at the DB level.
     await db.transaction(async (tx) => {
+      // 0. Lock the click row to prevent race conditions
+      const [currentClick] = await tx
+        .select()
+        .from(clicks)
+        .where(eq(clicks.id, click.id))
+        .for("update")
+        .limit(1);
+
+      if (!currentClick || currentClick.trackingStatus === "approved" || currentClick.trackingStatus === "deleted") {
+        throw new Error(`[finance] Click ${click.id} is already approved or deleted.`);
+      }
+
       // 1. Lock the wallet row (prevents race conditions with concurrent credits/debits)
       let [wallet] = await tx
         .select()
@@ -797,7 +805,6 @@ export const adminApproveClickFormAction = async (formData: FormData) => {
       const adminUserId = admin.id !== click.userId ? admin.id : null;
 
       // 3. Insert the wallet_transactions ledger entry
-      // The UNIQUE constraint on sourceClickId prevents double-credit at DB level
       await tx.insert(walletTransactions).values({
         walletId: wallet.id,
         userId: click.userId,
@@ -936,6 +943,18 @@ export const adminUndoApprovedClickFormAction = async (formData: FormData) => {
 
     // ─── ATOMIC OPERATION: Debit wallet + Reset click status in one DB transaction ───
     await db.transaction(async (tx) => {
+      // 0. Lock the click row to prevent double-reversal race condition
+      const [currentClick] = await tx
+        .select()
+        .from(clicks)
+        .where(eq(clicks.id, click.id))
+        .for("update")
+        .limit(1);
+
+      if (!currentClick || currentClick.trackingStatus !== "approved") {
+        throw new Error(`[finance] Click ${click.id} is no longer approved.`);
+      }
+
       // 1. Lock the wallet row
       const [wallet] = await tx
         .select()
@@ -957,7 +976,13 @@ export const adminUndoApprovedClickFormAction = async (formData: FormData) => {
       const sequenceNumber = wallet.lastLedgerSequence + 1;
       const adminUserId = admin.id !== click.userId ? admin.id : null;
 
-      // 3. Insert reversal debit ledger entry (never delete the original credit!)
+      // 3a. Free up the sourceClickId constraint on the original transaction so it can be re-approved later
+      await tx
+        .update(walletTransactions)
+        .set({ sourceClickId: null })
+        .where(eq(walletTransactions.id, rewardTransaction.id));
+
+      // 3b. Insert reversal debit ledger entry (never delete the original credit!)
       await tx.insert(walletTransactions).values({
         walletId: wallet.id,
         userId: click.userId,
@@ -968,6 +993,7 @@ export const adminUndoApprovedClickFormAction = async (formData: FormData) => {
         sequenceNumber,
         note: `Reversal of cashback for click ${click.id}`,
         sourceClickId: null, // not linked to the original click to avoid constraint conflict
+        idempotencyKey: `undo_click_${click.id}_${Date.now()}`,
         adminUserId,
       });
 

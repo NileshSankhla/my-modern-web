@@ -6,6 +6,9 @@ import { affiliateLinks, clicks, merchants } from "@/lib/db/schema";
 import { eq, sql, and, count, max } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 import { Redis } from "@upstash/redis";
+import { logSecurityEvent, SECURITY_EVENTS } from "@/lib/security/audit";
+import { clearAffiliateLinksCache } from "@/lib/affiliate-rotation";
+
 
 const REDIS_LINKS_KEY = process.env.AFFILIATE_REDIS_LIST_KEY || "affiliate:amazon:links";
 const REDIS_COUNTER_KEY = "affiliate:amazon:counter";
@@ -73,11 +76,16 @@ export async function reloadRedisLinksAction(): Promise<{ success?: string; erro
 
     const activeUrls = rows.map((r) => r.url);
 
-    // Atomically replace the list
-    await redis.del(REDIS_LINKS_KEY);
+    // Use a pipeline to atomically replace the list — prevents a race window
+    // where concurrent redirects see an empty list between DEL and RPUSH.
+    const pipeline = redis.pipeline();
+    pipeline.del(REDIS_LINKS_KEY);
     if (activeUrls.length > 0) {
-      await redis.rpush(REDIS_LINKS_KEY, ...activeUrls);
+      pipeline.rpush(REDIS_LINKS_KEY, ...activeUrls);
     }
+    await pipeline.exec();
+    
+    clearAffiliateLinksCache();
 
     return { success: `Redis links refreshed: ${activeUrls.length} active link(s) loaded.`, count: activeUrls.length };
   } catch (err: any) {
@@ -150,7 +158,7 @@ export async function flushAffiliateRedisKeysAction(): Promise<{ success?: strin
 
 // Add a new affiliate link to the DB and sync Redis
 export async function addAffiliateLinkAction(url: string): Promise<{ success?: string; error?: string; linkId?: number }> {
-  await requireAdminUser();
+  const admin = await requireAdminUser();
 
   const validation = validateAmazonAffiliateUrl(url);
   if (!validation.valid) return { error: validation.error };
@@ -189,6 +197,8 @@ export async function addAffiliateLinkAction(url: string): Promise<{ success?: s
     await reloadRedisLinksAction();
     revalidatePath("/admin");
 
+    await logSecurityEvent(SECURITY_EVENTS.LINK_ADDED, { actorId: admin.id, entityType: "affiliate_link", entityId: String(inserted.id), metadata: { action: "add", url: cleanUrl, tag: validation.tag, linkNumber: nextLinkNumber } });
+
     return { success: `Link #${nextLinkNumber} added (tag: ${validation.tag}).`, linkId: inserted.id };
   } catch (err: any) {
     console.error("[affiliate] addAffiliateLinkAction failed:", err);
@@ -198,7 +208,7 @@ export async function addAffiliateLinkAction(url: string): Promise<{ success?: s
 
 // Update an existing affiliate link URL
 export async function updateAffiliateLinkAction(id: number, url: string): Promise<{ success?: string; error?: string }> {
-  await requireAdminUser();
+  const admin = await requireAdminUser();
 
   const validation = validateAmazonAffiliateUrl(url);
   if (!validation.valid) return { error: validation.error };
@@ -235,6 +245,8 @@ export async function updateAffiliateLinkAction(id: number, url: string): Promis
     await reloadRedisLinksAction();
     revalidatePath("/admin");
 
+    await logSecurityEvent(SECURITY_EVENTS.LINK_UPDATED, { actorId: admin.id, entityType: "affiliate_link", entityId: String(id), metadata: { action: "update", newUrl: cleanUrl, newTag: validation.tag } });
+
     return { success: `Link updated (tag: ${validation.tag}).` };
   } catch (err: any) {
     return { error: `Failed to update link: ${err.message}` };
@@ -243,7 +255,7 @@ export async function updateAffiliateLinkAction(id: number, url: string): Promis
 
 // Toggle a link active/inactive
 export async function toggleAffiliateLinkAction(id: number, isActive: boolean): Promise<{ success?: string; error?: string }> {
-  await requireAdminUser();
+  const admin = await requireAdminUser();
   try {
     await db
       .update(affiliateLinks)
@@ -253,6 +265,8 @@ export async function toggleAffiliateLinkAction(id: number, isActive: boolean): 
     await reloadRedisLinksAction();
     revalidatePath("/admin");
 
+    await logSecurityEvent(SECURITY_EVENTS.LINK_TOGGLED, { actorId: admin.id, entityType: "affiliate_link", entityId: String(id), metadata: { action: "toggle", isActive } });
+
     return { success: `Link ${isActive ? "activated" : "paused"} successfully.` };
   } catch (err: any) {
     return { error: `Failed to toggle link: ${err.message}` };
@@ -261,7 +275,7 @@ export async function toggleAffiliateLinkAction(id: number, isActive: boolean): 
 
 // Remove an affiliate link (hard delete — click history is preserved via affiliateLinkIndex)
 export async function removeAffiliateLinkAction(id: number): Promise<{ success?: string; error?: string }> {
-  await requireAdminUser();
+  const admin = await requireAdminUser();
   try {
     const [link] = await db
       .select({ id: affiliateLinks.id, linkNumber: affiliateLinks.linkNumber })
@@ -274,6 +288,8 @@ export async function removeAffiliateLinkAction(id: number): Promise<{ success?:
     await db.delete(affiliateLinks).where(eq(affiliateLinks.id, id));
     await reloadRedisLinksAction();
     revalidatePath("/admin");
+
+    await logSecurityEvent(SECURITY_EVENTS.LINK_REMOVED, { actorId: admin.id, entityType: "affiliate_link", entityId: String(id), metadata: { action: "remove", linkNumber: link.linkNumber } });
 
     return { success: `Link #${link.linkNumber} removed. Click history is preserved.` };
   } catch (err: any) {

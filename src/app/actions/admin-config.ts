@@ -110,6 +110,7 @@ export async function bulkApproveCSVAction(csvText: string) {
       const formData = new FormData();
       formData.append("clickId", clickId);
       formData.append("amount", amount);
+      formData.append("idempotencyKey", `csv-approve-${clickId}-${amount}`);
 
       // We dynamically import to avoid circular dependencies if any
       const { adminApproveClickFormAction } =

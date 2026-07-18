@@ -68,6 +68,9 @@ export const generateFingerprintFromHeaders = (headers: Record<string, string | 
 // ── Get client IP (handles proxies) ─────────────────────────────────────────
 
 export const getClientIP = (request: NextRequest): string => {
+  // Use Next.js provided IP first (most secure, set by Vercel/Next.js)
+  if ((request as any).ip) return (request as any).ip;
+
   // Check X-Forwarded-For (most common proxy header)
   const xff = request.headers.get("x-forwarded-for");
   if (xff) {

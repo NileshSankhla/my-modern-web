@@ -56,6 +56,14 @@ export const adminSendAlertAction = async (
         adminUserId: admin.id,
       });
 
+      const { logSecurityEvent, SECURITY_EVENTS } = await import("@/lib/security/audit");
+      await logSecurityEvent(SECURITY_EVENTS.NOTIFICATION_SENT, {
+        actorId: admin.id,
+        entityType: "notification",
+        entityId: targetUser.id.toString(),
+        metadata: { type: "single" },
+      });
+
       revalidatePath("/admin");
       revalidatePath("/notifications");
       return { success: "Alert sent to user." };
@@ -74,6 +82,13 @@ export const adminSendAlertAction = async (
         adminUserId: admin.id,
       })),
     );
+
+    const { logSecurityEvent, SECURITY_EVENTS } = await import("@/lib/security/audit");
+    await logSecurityEvent(SECURITY_EVENTS.NOTIFICATION_SENT, {
+      actorId: admin.id,
+      entityType: "notification",
+      metadata: { type: "all", count: allUsers.length },
+    });
 
     revalidatePath("/admin");
     revalidatePath("/notifications");

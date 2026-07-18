@@ -60,7 +60,7 @@ export async function GET(request: NextRequest) {
   const storedRedirect = cookieStore.get(GOOGLE_OAUTH_REDIRECT_COOKIE)?.value;
   cookieStore.delete(GOOGLE_OAUTH_STATE_COOKIE);
   cookieStore.delete(GOOGLE_OAUTH_REDIRECT_COOKIE);
-  const redirectPath = getSafeRedirectPath(storedRedirect ?? "/");
+  let redirectPath = getSafeRedirectPath(storedRedirect ?? "/");
 
   if (!storedState || storedState !== state) {
     return NextResponse.redirect(
@@ -130,7 +130,7 @@ export async function GET(request: NextRequest) {
 
     // Find or create user
     let [existingUser] = await db
-      .select({ id: users.id })
+      .select({ id: users.id, isAdmin: users.isAdmin, isFinanceManager: users.isFinanceManager })
       .from(users)
       .where(eq(users.email, email))
       .limit(1);
@@ -146,7 +146,7 @@ export async function GET(request: NextRequest) {
           passwordHash: randomPassword,
           isAdmin: isConfiguredAdminEmail(email),
         })
-        .returning({ id: users.id });
+        .returning({ id: users.id, isAdmin: users.isAdmin, isFinanceManager: users.isFinanceManager });
 
       await ensureWalletsForUser(createdUser.id);
       existingUser = createdUser;
@@ -167,8 +167,15 @@ export async function GET(request: NextRequest) {
 
     await createSession(existingUser.id);
 
-    if (isConfiguredAdminEmail(email)) {
-      redirect("/finance");
+    const isAdmin = existingUser.isAdmin || isConfiguredAdminEmail(email);
+    const isFinance = existingUser.isFinanceManager;
+
+    if (isAdmin && isFinance) {
+      // No forced redirect if they have both permissions (use normal redirectPath)
+    } else if (isAdmin) {
+      redirectPath = "/admin";
+    } else if (isFinance) {
+      redirectPath = "/finance";
     }
   } catch (error) {
     console.error("Google OAuth callback error:", error);

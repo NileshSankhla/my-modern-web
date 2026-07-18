@@ -94,6 +94,7 @@ const getNextCountFromDbCounter = async (): Promise<number> => {
 
 export async function getNextAffiliateLinkIndex(): Promise<{ index: number; url: string }> {
   const redis = getRedisClient();
+  
   if (redis) {
     try {
       const totalLinks = await redis.llen(REDIS_LINKS_KEY);
@@ -103,9 +104,14 @@ export async function getNextAffiliateLinkIndex(): Promise<{ index: number; url:
         const url = await redis.lindex(REDIS_LINKS_KEY, index);
         const normalizedUrl = normalizeAmazonAffiliateUrl(typeof url === "string" ? url : null);
         if (normalizedUrl) return { index, url: normalizedUrl };
+        // lindex returned null or invalid — use index 0 as safety fallback (don't re-increment)
+        const fallbackUrl = await redis.lindex(REDIS_LINKS_KEY, 0);
+        const fallbackNormalized = normalizeAmazonAffiliateUrl(typeof fallbackUrl === "string" ? fallbackUrl : null);
+        if (fallbackNormalized) return { index: 0, url: fallbackNormalized };
       }
     } catch {}
   }
+  
   try {
     const links = await getLinksFromDatabase();
     if (links.length > 0) {
@@ -131,4 +137,9 @@ export async function getAffiliateLinkByIndex(index: number): Promise<string | n
   }
   const links = await getLinksFromDatabase();
   return links[index] ?? null;
+}
+
+export function clearAffiliateLinksCache(): void {
+  cachedAmazonLinks = null;
+  cachedAmazonMerchantId = null;
 }

@@ -20,23 +20,23 @@ import { logSecurityEvent, SECURITY_EVENTS } from "./lib/security/audit";
 
 // State-changing API routes that need CSRF + signature verification
 const PROTECTED_API_PATTERNS = [
-  /^\/api\/auth\//,
-  /^\/api\/user\/wallet/,
-  /^\/api\/admin\//,
-  /^\/api\/revalidate/,
+  /^\/api\/auth\//i,
+  /^\/api\/user\/wallet/i,
+  /^\/api\/admin\//i,
+  /^\/api\/revalidate/i,
 ];
 
 // Routes exempt from all security (static assets, OAuth callbacks)
 const EXEMPT_PATTERNS = [
-  /^\/_next\//,
-  /^\/favicon/,
-  /^\/brand-name/,
-  /^\/manifest\.json$/,
-  /^\/robots\.txt$/,
-  /^\/sitemap\.xml$/,
-  /^\/api\/health\//,
-  /^\/api\/auth\/google(\/callback)?$/, // OAuth needs to work cross-origin
-  /^\/api\/security\/report-csp$/, // CSP reports come from browser
+  /^\/_next\//i,
+  /^\/favicon/i,
+  /^\/brand-name/i,
+  /^\/manifest\.json$/i,
+  /^\/robots\.txt$/i,
+  /^\/sitemap\.xml$/i,
+  /^\/api\/health\//i,
+  /^\/api\/auth\/google(\/callback)?$/i, // OAuth needs to work cross-origin
+  /^\/api\/security\/report-csp$/i, // CSP reports come from browser
 ];
 
 export default async function proxy(request: NextRequest) {

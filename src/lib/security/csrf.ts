@@ -106,25 +106,20 @@ export const checkCSRF = (request: NextRequest): { valid: boolean; error?: strin
   if (stateChanging) {
     // 3. Custom header requirement (X-Requested-With)
     // Browsers won't send custom headers cross-origin without preflight.
-    const customHeader =
-      request.headers.get("x-requested-with") ??
-      request.headers.get(CSRF_HEADER_NAME);
+    const customHeader = request.headers.get("x-requested-with");
+    const headerToken = request.headers.get(CSRF_HEADER_NAME);
+    const cookieToken = request.cookies.get(CSRF_COOKIE_NAME)?.value;
 
-    if (!customHeader) {
+    if (!customHeader && !headerToken) {
       return { valid: false, error: "Missing CSRF header" };
     }
 
     // 4. Double-submit cookie validation
-    const cookieToken = request.cookies.get(CSRF_COOKIE_NAME)?.value;
-    const headerToken = request.headers.get(CSRF_HEADER_NAME);
-
-    if (headerToken && cookieToken) {
-      if (!validateCSRFToken(cookieToken, headerToken)) {
-        return { valid: false, error: "CSRF token mismatch" };
+    if (headerToken || cookieToken) {
+      if (!validateCSRFToken(cookieToken, headerToken ?? undefined)) {
+        return { valid: false, error: "CSRF token mismatch or missing cookie" };
       }
     }
-    // If only X-Requested-With is present (no double-submit), accept it
-    // because the custom header alone provides CSRF protection.
   }
 
   return { valid: true };

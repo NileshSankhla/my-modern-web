@@ -47,7 +47,8 @@ export default async function AdminDashboardPage() {
   const allUsersFromDb = await db
     .select({ id: users.id, name: users.name, email: users.email, isAdmin: users.isAdmin, isFinanceManager: users.isFinanceManager, createdAt: users.createdAt })
     .from(users)
-    .orderBy(users.name);
+    .orderBy(users.email)
+    .limit(500);
   const allPlatformUsers: AllPlatformUser[] = allUsersFromDb.map(u => ({
     numericId: u.id,
     name: u.name || u.email.split("@")[0],

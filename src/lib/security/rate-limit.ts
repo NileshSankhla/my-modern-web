@@ -129,13 +129,20 @@ const rateLimitRedis = async (
       }
     }
 
-    const setKey = `ratelimit:${key}`;
+    // Use multi for atomic execution
+    const multi = redis.multi();
+    const member = `${now}-${Math.random()}`;
 
     // Remove entries outside the window
-    await redis.zremrangebyscore(setKey, 0, windowStart);
-
+    multi.zremrangebyscore(key, 0, windowStart);
     // Count current entries
-    const count = await redis.zcard(setKey);
+    multi.zcard(key);
+    // Add current request to the set
+    multi.zadd(key, { score: now, member });
+    multi.expire(key, config.windowSeconds);
+
+    const results = await multi.exec();
+    const count = results[1] as number;
 
     if (count >= config.limit) {
       // Over limit — progressive backoff for repeat offenders
@@ -164,10 +171,6 @@ const rateLimitRedis = async (
         retryAfter: config.windowSeconds,
       };
     }
-
-    // Add current request to the set
-    await redis.zadd(setKey, { score: now, member: `${now}-${Math.random()}` });
-    await redis.expire(setKey, config.windowSeconds);
 
     return {
       success: true,
