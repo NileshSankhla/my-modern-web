@@ -7,5 +7,5 @@ try {
   const decrypted = decrypt(payload.encrypted);
   console.log("Decrypted:", decrypted);
 } catch (e) {
-  console.error("Error:", e.message);
+  console.error("Error:", e instanceof Error ? e.message : String(e));
 }
