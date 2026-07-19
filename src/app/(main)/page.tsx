@@ -44,6 +44,7 @@ import {
   getAllMerchants,
   SUPPORTED_MERCHANT_NAMES,
 } from "@/lib/data/merchants";
+import { HERO_PRIORITY_MERCHANTS } from "@/config/app";
 
 type ClickTrackingStatus = "unreviewed" | "tracked" | "approved" | "deleted";
 
@@ -65,7 +66,7 @@ const Page = async () => {
   const visibleMerchantList = merchantList.filter((merchant) =>
     SUPPORTED_MERCHANT_NAMES.has(merchant.name.trim().toLowerCase()),
   );
-  const heroPriorityMerchantNames = ["amazon", "flipkart", "myntra"];
+  const heroPriorityMerchantNames = HERO_PRIORITY_MERCHANTS;
   const featuredHeroMerchantRecords: (typeof merchants.$inferSelect)[] = [];
   const normalizedMerchantMap = new Map<
     string,

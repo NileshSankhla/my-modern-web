@@ -26,6 +26,7 @@ const Footer = () => {
               width={164}
               height={64}
               className="h-10 w-auto dark:hidden"
+              priority
             />
             <Image
               src="/brand-name-light.svg"
@@ -33,6 +34,7 @@ const Footer = () => {
               width={164}
               height={64}
               className="hidden h-10 w-auto dark:block"
+              priority
             />
           </FooterNavLink>
 

@@ -20,19 +20,16 @@ import {
   getAffiliateLinkByIndex,
   getNextAffiliateLinkIndex,
 } from "@/lib/affiliate-rotation";
+import { REDIRECT_CONFIG, MERCHANT_AFFILIATE_URLS, APP_CONFIG } from "@/config/app";
 
-const TEST_MERCHANT_HOMEPAGES: Record<string, string> = {
-  flipkart: "https://fktr.in/49T8I82",
-  myntra: "https://myntr.it/auK4aA9",
-  ajio: "https://ajiio.in/xTvzcfm",
-};
+const TEST_MERCHANT_HOMEPAGES: Record<string, string> = MERCHANT_AFFILIATE_URLS;
 
-const IDEMPOTENCY_LOCK_TTL_SECONDS = 3;
-const IDEMPOTENCY_WAIT_MS = 40;
+const IDEMPOTENCY_LOCK_TTL_SECONDS = REDIRECT_CONFIG.idempotencyLockTtlSeconds;
+const IDEMPOTENCY_WAIT_MS = REDIRECT_CONFIG.idempotencyWaitMs;
 // Give the Redis key a 24-hour max lifespan; the date string naturally invalidates it at midnight anyway.
-const RECENT_CLICK_TTL_SECONDS = 24 * 60 * 60;
+const RECENT_CLICK_TTL_SECONDS = REDIRECT_CONFIG.recentClickTtlSeconds;
 const IST_DATE_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Kolkata",
+  timeZone: APP_CONFIG.timezone,
   year: "numeric",
   month: "2-digit",
   day: "2-digit",
@@ -78,8 +75,8 @@ const getISTDateString = (date: Date): string => {
 
 const getISTStartOfDay = (date: Date): Date => {
   const dateString = getISTDateString(date);
-  // Construct an exact ISO string for midnight in Indian Standard Time (+05:30)
-  return new Date(`${dateString}T00:00:00+05:30`);
+  // Construct an exact ISO string for midnight in configured timezone
+  return new Date(`${dateString}T00:00:00${APP_CONFIG.timezoneOffset}`);
 };
 // -----------------------------------------------
 
@@ -168,9 +165,9 @@ export async function GET(request: NextRequest) {
         const rateLimitKey = `rate_limit:redirect:${user.id}`;
         const requests = await redis.incr(rateLimitKey);
         if (requests === 1) {
-          await redis.expire(rateLimitKey, 300); // 5 minutes window
+          await redis.expire(rateLimitKey, REDIRECT_CONFIG.rateLimitWindowSeconds);
         }
-        if (requests > 30) {
+        if (requests > REDIRECT_CONFIG.rateLimitMax) {
           return NextResponse.json(
             { error: "Too many redirect requests. Please try again later." },
             { status: 429 },

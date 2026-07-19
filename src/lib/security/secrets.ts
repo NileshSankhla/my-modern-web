@@ -1,54 +1,52 @@
 // ============================================================================
-// FAREBACK — Secrets Management with Rotation
+// FAREBACK — Boot-time Secrets Validation
 // ============================================================================
-// Centralized secrets access. All env-based secrets go through here so we can:
-//   - Validate they're set at boot time
-//   - Rotate without redeploy (via Upstash Redis hot-reload)
-//   - Audit which secrets are accessed
-//   - Fail loudly if a required secret is missing
+// Called ONCE from instrumentation.ts when the server starts.
+// Hard-fails loudly if any required secret is missing in production.
+// In development: logs a warning but doesn't crash so devs can start with
+// partial config.
 // ============================================================================
 
 import "server-only";
 
-// ── Required secrets ────────────────────────────────────────────────────────
-// Validated at boot. App will not start if any are missing.
-
+// ── Required secrets ─────────────────────────────────────────────────────────
+// App cannot function correctly without these in production.
 const REQUIRED_SECRETS = [
   "DATABASE_URL",
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
-  "CSRF_SECRET",
+  "SESSION_SECRET",
   "ENCRYPTION_MASTER_KEY",
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
-  "API_SIGNING_SECRET",
+  "COMPARISON_SECRET",
+  "CRON_SECRET",
 ] as const;
 
-// ── Optional secrets (have defaults or are feature-gated) ───────────────────
-
+// ── Optional secrets (have defaults or are feature-gated) ────────────────────
 const OPTIONAL_SECRETS = [
   "RESEND_API_KEY",
   "RESEND_FROM_EMAIL",
+  "RESEND_WEBHOOK_SECRET",
   "TURNSTILE_SECRET_KEY",
-  "TURNSTILE_SITE_KEY",
+  "NEXT_PUBLIC_TURNSTILE_SITE_KEY",
   "SIEM_WEBHOOK_URL",
   "SIEM_API_KEY",
   "SLACK_WEBHOOK_URL",
   "ADMIN_EMAILS",
-  "CRON_SECRET",
-  "REVALIDATION_TOKEN",
   "GIFT_CARD_ENCRYPTION_KEY",
-  "COMPARISON_SECRET",
+  "AMAZON_AFFILIATE_BASE_URL",
+  "API_SIGNING_SECRET",
 ] as const;
 
-// ── Validate secrets at boot ────────────────────────────────────────────────
+// ── Validate secrets ──────────────────────────────────────────────────────────
 
 export const validateSecrets = (): { valid: boolean; missing: string[] } => {
   const missing = REQUIRED_SECRETS.filter((s) => !process.env[s]);
   return { valid: missing.length === 0, missing };
 };
 
-// ─- Get a required secret (throws if missing) ───────────────────────────────
+// ── Get a required secret (throws if missing) ─────────────────────────────────
 
 export const getSecret = (key: typeof REQUIRED_SECRETS[number]): string => {
   const value = process.env[key];
@@ -60,7 +58,7 @@ export const getSecret = (key: typeof REQUIRED_SECRETS[number]): string => {
   return value;
 };
 
-// ── Get an optional secret (returns undefined if missing) ───────────────────
+// ── Get an optional secret (returns undefined if missing) ─────────────────────
 
 export const getOptionalSecret = (
   key: typeof OPTIONAL_SECRETS[number],
@@ -68,7 +66,7 @@ export const getOptionalSecret = (
   return process.env[key];
 };
 
-// ── Get a secret with a fallback ────────────────────────────────────────────
+// ── Get a secret with a fallback ──────────────────────────────────────────────
 
 export const getSecretWithFallback = (
   key: string,
@@ -77,14 +75,15 @@ export const getSecretWithFallback = (
   return process.env[key] ?? fallback;
 };
 
-// ── Check if a feature is enabled (based on secret presence) ────────────────
+// ── Check if a feature is enabled (based on secret presence) ─────────────────
 
 export const isFeatureEnabled = (feature: "email" | "turnstile" | "siem" | "slack"): boolean => {
   switch (feature) {
     case "email":
       return Boolean(process.env.RESEND_API_KEY);
     case "turnstile":
-      return Boolean(process.env.TURNSTILE_SECRET_KEY && process.env.TURNSTILE_SITE_KEY);
+      // Secret key is server-only; site key must be NEXT_PUBLIC_ for client
+      return Boolean(process.env.TURNSTILE_SECRET_KEY && process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY);
     case "siem":
       return Boolean(process.env.SIEM_WEBHOOK_URL);
     case "slack":
@@ -94,7 +93,7 @@ export const isFeatureEnabled = (feature: "email" | "turnstile" | "siem" | "slac
   }
 };
 
-// ── Hot-reload secrets from Redis (for rotation without redeploy) ───────────
+// ── Hot-reload secrets from Redis (for rotation without redeploy) ─────────────
 // Set `secrets:KEY` in Redis to override the env value.
 // Useful for emergency key rotation without a redeploy.
 
@@ -136,7 +135,7 @@ export const getHotSecret = async (key: string): Promise<string | undefined> => 
   return process.env[key];
 };
 
-// ── Rotate a secret (sets the new value in Redis) ───────────────────────────
+// ── Rotate a secret (sets the new value in Redis) ─────────────────────────────
 // Does NOT update the env var — that requires a redeploy. But the hot-reload
 // path above will pick up the new value within 1 minute.
 

@@ -8,10 +8,10 @@ import { revalidatePath } from "next/cache";
 import { Redis } from "@upstash/redis";
 import { logSecurityEvent, SECURITY_EVENTS } from "@/lib/security/audit";
 import { clearAffiliateLinksCache } from "@/lib/affiliate-rotation";
+import { AMAZON_CONFIG } from "@/config/app";
 
-
-const REDIS_LINKS_KEY = process.env.AFFILIATE_REDIS_LIST_KEY || "affiliate:amazon:links";
-const REDIS_COUNTER_KEY = "affiliate:amazon:counter";
+const REDIS_LINKS_KEY = AMAZON_CONFIG.redisLinksKey;
+const REDIS_COUNTER_KEY = AMAZON_CONFIG.redisCounterKey;
 
 // Singleton pattern for Redis client
 let _redis: Redis | null = null;
@@ -36,8 +36,7 @@ const validateAmazonAffiliateUrl = (url: string): { valid: boolean; error?: stri
   if (parsed.protocol !== "https:") {
     return { valid: false, error: "URL must use HTTPS." };
   }
-  const validHosts = ["amazon.in", "www.amazon.in", "amazon.com", "www.amazon.com"];
-  if (!validHosts.includes(parsed.hostname)) {
+  if (!AMAZON_CONFIG.validHosts.includes(parsed.hostname)) {
     return { valid: false, error: `Not an Amazon domain. Got: ${parsed.hostname}` };
   }
   const tag = parsed.searchParams.get("tag");

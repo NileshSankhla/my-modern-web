@@ -1,5 +1,6 @@
 import { asc, desc, eq, ilike, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { isRedirectError } from "next/dist/client/components/redirect-error";
 
 import { requireAdminUser } from "@/lib/admin";
 import { db } from "@/lib/db";
@@ -138,6 +139,8 @@ export async function GET(request: Request) {
       { headers: noStoreHeaders },
     );
   } catch (error) {
+    // Re-throw redirect errors (NEXT_REDIRECT) — they must not be caught as 500s
+    if (isRedirectError(error)) throw error;
     console.error("Admin user search error:", error);
     return NextResponse.json(
       { error: "Failed to fetch users." },

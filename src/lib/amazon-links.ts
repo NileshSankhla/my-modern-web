@@ -1,13 +1,13 @@
-// Primary fallback URL — used when Redis and DB both fail
-export const PRIMARY_AMAZON_AFFILIATE_URL = "https://www.amazon.in/?tag=fareback2-21";
-export const PRIMARY_AMAZON_MERCHANT_ID = Number(process.env.AMAZON_MERCHANT_ID || 1);
+// All Amazon config is centralized in @/config/app — no hardcoded values here.
+import { AMAZON_CONFIG } from "@/config/app";
+
+export const PRIMARY_AMAZON_AFFILIATE_URL = AMAZON_CONFIG.primaryAffiliateUrl;
+export const PRIMARY_AMAZON_MERCHANT_ID = AMAZON_CONFIG.merchantId;
 
 // NOTE: No hardcoded tag allowlist. Any tag added by admin via the admin panel is accepted.
 // Tag validation is done at DB-insert time (admin panel validates the URL has a tag parameter).
-const VALID_AMAZON_HOSTS = ["amazon.in", "amazon.com"];
-
 const isAmazonHost = (hostname: string): boolean =>
-  VALID_AMAZON_HOSTS.some(
+  AMAZON_CONFIG.validHosts.some(
     (suffix: string) => hostname === suffix || hostname.endsWith(`.${suffix}`),
   );
 

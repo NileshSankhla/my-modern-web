@@ -19,10 +19,12 @@ import { Redis } from "@upstash/redis";
 
 import { timingSafeEqual } from 'node:crypto';
 
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL!,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
-});
+const redis = (() => {
+  const url = process.env.UPSTASH_REDIS_REST_URL;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN;
+  if (!url || !token) return null;
+  return new Redis({ url, token });
+})();
 
 // Verify Vercel Cron authorization
 function verifyCronAuth(request: Request): boolean {
@@ -60,13 +62,17 @@ export async function GET(request: Request) {
 
   try {
     // Prevent concurrent cron executions via Redis Distributed Lock
+    // If Redis is unavailable, skip the lock (degraded mode — reconciliation still runs)
     const hourKey = new Date().toISOString().substring(0, 13); // e.g. "2024-03-15T14"
     const lockKey = `cron_lock:reconcile:${hourKey}`;
-    const acquired = await redis.set(lockKey, 'locked', { nx: true, ex: 300 });
-
-    if (!acquired) {
-      console.log('Cron skipped: Lock already held by another instance.');
-      return NextResponse.json({ status: 'skipped', reason: 'already_running_or_completed' });
+    if (redis) {
+      const acquired = await redis.set(lockKey, 'locked', { nx: true, ex: 300 });
+      if (!acquired) {
+        console.log('Cron skipped: Lock already held by another instance.');
+        return NextResponse.json({ status: 'skipped', reason: 'already_running_or_completed' });
+      }
+    } else {
+      console.warn('[cron/reconcile] Redis unavailable — running without distributed lock (degraded mode)');
     }
 
     // Run the reconciliation query
@@ -98,7 +104,15 @@ export async function GET(request: Request) {
     `;
 
     const results = await db.execute(reconciliationQuery);
-    mismatchesFound = results.rows as unknown as MismatchResult[];
+    // Neon returns snake_case column names from raw SQL — map to camelCase
+    mismatchesFound = (results.rows as any[]).map((row) => ({
+      walletId: row.wallet_id ?? row.walletId,
+      userId: row.user_id ?? row.userId,
+      walletType: row.wallet_type ?? row.walletType,
+      cachedBalance: row.cached_balance ?? row.cachedBalance,
+      ledgerBalance: row.ledger_balance ?? row.ledgerBalance,
+      difference: (row.cached_balance ?? row.cachedBalance) - (row.ledger_balance ?? row.ledgerBalance),
+    }));
 
     // Get total wallets for reporting
     const countResult = await db

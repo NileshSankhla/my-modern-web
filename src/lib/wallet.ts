@@ -19,6 +19,7 @@ import { eq, sql, and, desc } from "drizzle-orm";
 import { createId } from "@paralleldrive/cuid2";
 import { Redis } from "@upstash/redis";
 import { z } from "zod";
+import { WALLET_CONFIG } from "@/config/app";
 
 // Constants
 export const DEFAULT_WALLET_TYPE = "cashback";
@@ -33,8 +34,8 @@ const redis = process.env.UPSTASH_REDIS_REST_URL
 
 // Constants
 const IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60; // 24 hours
-const MINIMUM_WITHDRAWAL_PAISE = 100; // ₹1
-const MAXIMUM_WITHDRAWAL_PAISE = 5000000; // ₹50,000
+const MINIMUM_WITHDRAWAL_PAISE = WALLET_CONFIG.minimumWithdrawalPaise;
+const MAXIMUM_WITHDRAWAL_PAISE = WALLET_CONFIG.maximumWithdrawalPaise;
 
 // Types
 export type WalletType = "cashback" | "amazon_rewards";

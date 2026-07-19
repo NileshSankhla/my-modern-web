@@ -127,9 +127,13 @@ export const encrypt = (plaintext: string, keyVersion: string = "v1"): Encrypted
 
 export const decrypt = (payload: string): string => {
   const parts = payload.split(":");
-  if (parts.length !== 5) throw new Error("Invalid encrypted payload format");
+  if (parts.length !== 7) throw new Error("Invalid encrypted payload format");
 
-  const [version, encryptedDataKey, ivB64, ctB64, tagB64] = parts;
+  const version = parts[0];
+  const encryptedDataKey = `${parts[1]}:${parts[2]}:${parts[3]}`;
+  const ivB64 = parts[4];
+  const ctB64 = parts[5];
+  const tagB64 = parts[6];
 
   // 1. Get the master key for this version (supports key rotation)
   const { key: masterKey } = getMasterKey(version);
@@ -157,7 +161,7 @@ export const decrypt = (payload: string): string => {
 export const verifyIntegrity = (payload: string): boolean => {
   try {
     const parts = payload.split(":");
-    if (parts.length !== 5) return false;
+    if (parts.length !== 7) return false;
     // Attempt to decrypt — GCM auth tag will throw if tampered
     decrypt(payload);
     return true;

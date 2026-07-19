@@ -211,7 +211,11 @@ export const isPasswordBreached = async (
 // ── Password history (prevent reuse) ───────────────────────────────────────
 // Store last N password hashes. Check against this list on password change.
 
-export const PASSWORD_HISTORY_LIMIT = 5;
+export const PASSWORD_HISTORY_LIMIT = (() => {
+  // Lazy import to avoid circular dep — read from config at runtime
+  const { AUTH_CONFIG } = require("@/config/app");
+  return AUTH_CONFIG.passwordHistoryLimit as number;
+})();
 
 export const isPasswordInHistory = async (
   password: string,

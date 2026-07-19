@@ -5,19 +5,11 @@ import { unstable_cache } from "next/cache";
 
 import { db } from "@/lib/db";
 import { merchants } from "@/lib/db/schema";
+import { SUPPORTED_MERCHANTS, COMING_SOON_MERCHANTS } from "@/config/app";
 
-export const SUPPORTED_MERCHANT_NAMES = new Set([
-  "amazon",
-  "flipkart",
-  "myntra",
-  "ajio",
-]);
-
-export const COMING_SOON_MERCHANT_NAMES = new Set([
-  "flipkart",
-  "myntra",
-  "ajio",
-]);
+// Re-export from central config so all imports use one source of truth
+export const SUPPORTED_MERCHANT_NAMES = SUPPORTED_MERCHANTS;
+export const COMING_SOON_MERCHANT_NAMES = COMING_SOON_MERCHANTS;
 
 const getAllMerchantsCached = unstable_cache(
   async () => db.select().from(merchants),

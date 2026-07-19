@@ -3,6 +3,7 @@ import { AdminPanel } from "@/components/fareback-admin/admin-panel";
 import { db } from "@/lib/db";
 import { users, affiliateLinks as affiliateLinksTable, auditLogs, merchants, sessions, notifications, clicks } from "@/lib/db/schema";
 import { sql, desc, eq, and, count, gt, gte } from "drizzle-orm";
+import { PAGINATION } from "@/config/app";
 
 import { AdminRole, Kpi, AdminUser, AffiliateLink, AllPlatformUser, NotificationRecord, AuditEntry, ActivityItem } from "@/components/fareback-admin/data";
 
@@ -48,7 +49,7 @@ export default async function AdminDashboardPage() {
     .select({ id: users.id, name: users.name, email: users.email, isAdmin: users.isAdmin, isFinanceManager: users.isFinanceManager, createdAt: users.createdAt })
     .from(users)
     .orderBy(users.email)
-    .limit(500);
+    .limit(PAGINATION.adminUserListLimit);
   const allPlatformUsers: AllPlatformUser[] = allUsersFromDb.map(u => ({
     numericId: u.id,
     name: u.name || u.email.split("@")[0],

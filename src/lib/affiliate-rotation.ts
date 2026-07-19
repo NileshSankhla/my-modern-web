@@ -2,6 +2,7 @@ import { db } from "@/lib/db";
 import { affiliateLinks, merchants } from "@/lib/db/schema";
 import { Redis } from "@upstash/redis";
 import { and, asc, eq, sql } from "drizzle-orm";
+import { AMAZON_CONFIG } from "@/config/app";
 
 import {
   PRIMARY_AMAZON_AFFILIATE_URL,
@@ -14,11 +15,10 @@ export { PRIMARY_AMAZON_AFFILIATE_URL, PRIMARY_AMAZON_MERCHANT_ID, normalizeAmaz
 export const isPrimaryAmazonMerchantId = (merchantId: number): boolean =>
   merchantId === PRIMARY_AMAZON_MERCHANT_ID;
 
-const REDIS_COUNTER_KEY = "affiliate:amazon:counter";
-const REDIS_LINKS_KEY =
-  process.env.AFFILIATE_REDIS_LIST_KEY || "affiliate:amazon:links";
+const REDIS_COUNTER_KEY = AMAZON_CONFIG.redisCounterKey;
+const REDIS_LINKS_KEY = AMAZON_CONFIG.redisLinksKey;
 const AMAZON_LOOKUP_CACHE_TTL_MS = 60_000;
-const AMAZON_LINKS_CACHE_TTL_MS = 30_000;
+const AMAZON_LINKS_CACHE_TTL_MS = AMAZON_CONFIG.linkCacheTtlSeconds * 1_000;
 
 let redisClient: Redis | null = null;
 let cachedAmazonMerchantId: { value: number | null; expiresAt: number } | null = null;
