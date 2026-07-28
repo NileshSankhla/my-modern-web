@@ -207,12 +207,11 @@ export function TransactionHistory({ clicks = EMPTY }: TransactionHistoryProps) 
 
   const counts = useMemo(
     () => ({
-      not_review: bySection("not_review").length,
-      tracked: bySection("tracked").length,
-      not_tracked: bySection("not_tracked").length,
-      paid: bySection("paid").length,
+      not_review: filtered.filter((t) => t.section === "not_review").length,
+      tracked: filtered.filter((t) => t.section === "tracked").length,
+      not_tracked: filtered.filter((t) => t.section === "not_tracked").length,
+      paid: filtered.filter((t) => t.section === "paid").length,
     }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [filtered],
   );
 
