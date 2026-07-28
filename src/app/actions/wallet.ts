@@ -1139,6 +1139,7 @@ export const adminRestoreDeletedClickFormAction = async (formData: FormData) => 
 
     revalidatePath("/admin");
     revalidatePath("/");
+    revalidatePath("/finance");
   } catch (error) {
     console.error("Admin restore deleted click error:", error);
   }
